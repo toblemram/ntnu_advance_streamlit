@@ -1,0 +1,820 @@
+{
+  "zones": [
+    {
+      "zone_name": "Zone 16",
+      "rock_domain": "BKD17",
+      "chainage_from": "0+244",
+      "chainage_to": "0+601",
+      "sd": "SD15",
+      "station": "FD - LH",
+      "DRI": {
+        "Mean": 40.18,
+        "LB": 40.18,
+        "UB": 40.18
+      },
+      "CLI": {
+        "Mean": 16.31,
+        "LB": 16.31,
+        "UB": 16.31
+      },
+      "Q": {
+        "Mean": 32.6,
+        "LB": 32.6,
+        "UB": 32.6
+      },
+      "Porosity": {
+        "Mean": 1.0,
+        "LB": 1.0,
+        "UB": 1.0
+      },
+      "tunnel_direction": 356,
+      "set1": {
+        "strike": 52,
+        "dip": 62,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "set2": {
+        "strike": 93,
+        "dip": 80,
+        "Fr_mean": "Sf3",
+        "Fr_LB": "Sf3",
+        "Fr_UB": "Sf3"
+      },
+      "set3": {
+        "strike": 177,
+        "dip": 88,
+        "Fr_mean": "Sf2",
+        "Fr_LB": "Sf2",
+        "Fr_UB": "Sf2"
+      },
+      "length_m": 357.0
+    },
+    {
+      "zone_name": "Zone 15",
+      "rock_domain": "BKD16",
+      "chainage_from": "0+601",
+      "chainage_to": "1+156",
+      "sd": "SD14",
+      "station": "FD - LH",
+      "DRI": {
+        "Mean": 43.25,
+        "LB": 43.25,
+        "UB": 43.25
+      },
+      "CLI": {
+        "Mean": 10.99,
+        "LB": 10.99,
+        "UB": 10.99
+      },
+      "Q": {
+        "Mean": 33.91,
+        "LB": 33.91,
+        "UB": 33.91
+      },
+      "Porosity": {
+        "Mean": 1.0,
+        "LB": 1.0,
+        "UB": 1.0
+      },
+      "tunnel_direction": 357,
+      "set1": {
+        "strike": 67,
+        "dip": 89,
+        "Fr_mean": "Sf3",
+        "Fr_LB": "Sf3",
+        "Fr_UB": "Sf3"
+      },
+      "set2": {
+        "strike": 266,
+        "dip": 59,
+        "Fr_mean": "Sf2",
+        "Fr_LB": "Sf2",
+        "Fr_UB": "Sf2"
+      },
+      "set3": {
+        "strike": 243,
+        "dip": 22,
+        "Fr_mean": "Sf3",
+        "Fr_LB": "Sf3",
+        "Fr_UB": "Sf3"
+      },
+      "length_m": 555.0
+    },
+    {
+      "zone_name": "Zone 14",
+      "rock_domain": "BKD15",
+      "chainage_from": "1+156",
+      "chainage_to": "1+544",
+      "sd": "SD13",
+      "station": "FD - LH",
+      "DRI": {
+        "Mean": 40.51,
+        "LB": 40.51,
+        "UB": 40.51
+      },
+      "CLI": {
+        "Mean": 11.46,
+        "LB": 11.46,
+        "UB": 11.46
+      },
+      "Q": {
+        "Mean": 32.99,
+        "LB": 32.99,
+        "UB": 32.99
+      },
+      "Porosity": {
+        "Mean": 1.0,
+        "LB": 1.0,
+        "UB": 1.0
+      },
+      "tunnel_direction": 358,
+      "set1": {
+        "strike": 68,
+        "dip": 88,
+        "Fr_mean": "Sf3",
+        "Fr_LB": "Sf3",
+        "Fr_UB": "Sf3"
+      },
+      "set2": {
+        "strike": 93,
+        "dip": 82,
+        "Fr_mean": "Sf3",
+        "Fr_LB": "Sf3",
+        "Fr_UB": "Sf3"
+      },
+      "set3": {
+        "strike": 88,
+        "dip": 40,
+        "Fr_mean": "Sf3",
+        "Fr_LB": "Sf3",
+        "Fr_UB": "Sf3"
+      },
+      "length_m": 388.0
+    },
+    {
+      "zone_name": "Zone 13",
+      "rock_domain": "BKD15",
+      "chainage_from": "1+544",
+      "chainage_to": "1+829",
+      "sd": "SD12",
+      "station": "FD - LH",
+      "DRI": {
+        "Mean": 40.51,
+        "LB": 40.51,
+        "UB": 40.51
+      },
+      "CLI": {
+        "Mean": 11.46,
+        "LB": 11.46,
+        "UB": 11.46
+      },
+      "Q": {
+        "Mean": 29.52,
+        "LB": 29.52,
+        "UB": 29.52
+      },
+      "Porosity": {
+        "Mean": 1.0,
+        "LB": 1.0,
+        "UB": 1.0
+      },
+      "tunnel_direction": 358,
+      "set1": {
+        "strike": 67,
+        "dip": 88,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "set2": {
+        "strike": 93,
+        "dip": 77,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "set3": {
+        "strike": 189,
+        "dip": 75,
+        "Fr_mean": "Sf2",
+        "Fr_LB": "Sf2",
+        "Fr_UB": "Sf2"
+      },
+      "length_m": 285.0
+    },
+    {
+      "zone_name": "Zone 12",
+      "rock_domain": "BKD14",
+      "chainage_from": "1+829",
+      "chainage_to": "2+132",
+      "sd": "SD12",
+      "station": "FD - LH",
+      "DRI": {
+        "Mean": 40.18,
+        "LB": 40.18,
+        "UB": 40.18
+      },
+      "CLI": {
+        "Mean": 13.79,
+        "LB": 13.79,
+        "UB": 13.79
+      },
+      "Q": {
+        "Mean": 33.25,
+        "LB": 33.25,
+        "UB": 33.25
+      },
+      "Porosity": {
+        "Mean": 1.0,
+        "LB": 1.0,
+        "UB": 1.0
+      },
+      "tunnel_direction": 358,
+      "set1": {
+        "strike": 52,
+        "dip": 86,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "set2": {
+        "strike": 93,
+        "dip": 77,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "set3": {
+        "strike": 189,
+        "dip": 75,
+        "Fr_mean": "Sf2",
+        "Fr_LB": "Sf2",
+        "Fr_UB": "Sf2"
+      },
+      "length_m": 303.0
+    },
+    {
+      "zone_name": "Zone 11",
+      "rock_domain": "BKD14",
+      "chainage_from": "2+132",
+      "chainage_to": "2+302",
+      "sd": "SD11",
+      "station": "FD - LH",
+      "DRI": {
+        "Mean": 40.18,
+        "LB": 40.18,
+        "UB": 40.18
+      },
+      "CLI": {
+        "Mean": 13.79,
+        "LB": 13.79,
+        "UB": 13.79
+      },
+      "Q": {
+        "Mean": 25.71,
+        "LB": 25.71,
+        "UB": 25.71
+      },
+      "Porosity": {
+        "Mean": 1.0,
+        "LB": 1.0,
+        "UB": 1.0
+      },
+      "tunnel_direction": 359,
+      "set1": {
+        "strike": 52,
+        "dip": 86,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "set2": {
+        "strike": 93,
+        "dip": 77,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "set3": {
+        "strike": 189,
+        "dip": 75,
+        "Fr_mean": "Sf2",
+        "Fr_LB": "Sf2",
+        "Fr_UB": "Sf2"
+      },
+      "length_m": 170.0
+    },
+    {
+      "zone_name": "Zone 10",
+      "rock_domain": "BKD13",
+      "chainage_from": "2+302",
+      "chainage_to": "2+622",
+      "sd": "SD11",
+      "station": "FD - LH",
+      "DRI": {
+        "Mean": 33.77,
+        "LB": 33.77,
+        "UB": 33.77
+      },
+      "CLI": {
+        "Mean": 10.58,
+        "LB": 10.58,
+        "UB": 10.58
+      },
+      "Q": {
+        "Mean": 15.99,
+        "LB": 15.99,
+        "UB": 15.99
+      },
+      "Porosity": {
+        "Mean": 1.0,
+        "LB": 1.0,
+        "UB": 1.0
+      },
+      "tunnel_direction": 0,
+      "set1": {
+        "strike": 109,
+        "dip": 88,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "set2": {
+        "strike": 78,
+        "dip": 68,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "set3": {
+        "strike": 35,
+        "dip": 69,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "length_m": 320.0
+    },
+    {
+      "zone_name": "Zone 9",
+      "rock_domain": "BKD12",
+      "chainage_from": "2+622",
+      "chainage_to": "3+216",
+      "sd": "SD10",
+      "station": "FD - LH",
+      "DRI": {
+        "Mean": 36.02,
+        "LB": 36.02,
+        "UB": 36.02
+      },
+      "CLI": {
+        "Mean": 10.61,
+        "LB": 10.61,
+        "UB": 10.61
+      },
+      "Q": {
+        "Mean": 17.07,
+        "LB": 17.07,
+        "UB": 17.07
+      },
+      "Porosity": {
+        "Mean": 1.0,
+        "LB": 1.0,
+        "UB": 1.0
+      },
+      "tunnel_direction": 0,
+      "set1": {
+        "strike": 104,
+        "dip": 88,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "set2": {
+        "strike": 78,
+        "dip": 68,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "set3": {
+        "strike": 35,
+        "dip": 69,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "length_m": 594.0
+    },
+    {
+      "zone_name": "Zone 8",
+      "rock_domain": "BKD11",
+      "chainage_from": "3+216",
+      "chainage_to": "3+426",
+      "sd": "SD9",
+      "station": "FD - LH",
+      "DRI": {
+        "Mean": 42.39,
+        "LB": 42.39,
+        "UB": 42.39
+      },
+      "CLI": {
+        "Mean": 11.82,
+        "LB": 11.82,
+        "UB": 11.82
+      },
+      "Q": {
+        "Mean": 25.3,
+        "LB": 25.3,
+        "UB": 25.3
+      },
+      "Porosity": {
+        "Mean": 1.0,
+        "LB": 1.0,
+        "UB": 1.0
+      },
+      "tunnel_direction": 1,
+      "set1": {
+        "strike": 108,
+        "dip": 85,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "set2": {
+        "strike": 67,
+        "dip": 69,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "set3": {
+        "strike": 24,
+        "dip": 70,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "length_m": 210.0
+    },
+    {
+      "zone_name": "Zone 7",
+      "rock_domain": "BKD10",
+      "chainage_from": "3+426",
+      "chainage_to": "3+722",
+      "sd": "SD8",
+      "station": "FD - LH",
+      "DRI": {
+        "Mean": 41.48,
+        "LB": 41.48,
+        "UB": 41.48
+      },
+      "CLI": {
+        "Mean": 11.48,
+        "LB": 11.48,
+        "UB": 11.48
+      },
+      "Q": {
+        "Mean": 21.85,
+        "LB": 21.85,
+        "UB": 21.85
+      },
+      "Porosity": {
+        "Mean": 1.0,
+        "LB": 1.0,
+        "UB": 1.0
+      },
+      "tunnel_direction": 2,
+      "set1": {
+        "strike": 107,
+        "dip": 79,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "set2": {
+        "strike": 66,
+        "dip": 65,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "set3": {
+        "strike": 10,
+        "dip": 50,
+        "Fr_mean": "Sf3",
+        "Fr_LB": "Sf3",
+        "Fr_UB": "Sf3"
+      },
+      "length_m": 296.0
+    },
+    {
+      "zone_name": "Zone 6",
+      "rock_domain": "BKD9",
+      "chainage_from": "3+722",
+      "chainage_to": "4+022",
+      "sd": "SD7",
+      "station": "FD - LH",
+      "DRI": {
+        "Mean": 39.21,
+        "LB": 39.21,
+        "UB": 39.21
+      },
+      "CLI": {
+        "Mean": 9.6,
+        "LB": 9.6,
+        "UB": 9.6
+      },
+      "Q": {
+        "Mean": 16.13,
+        "LB": 16.13,
+        "UB": 16.13
+      },
+      "Porosity": {
+        "Mean": 1.0,
+        "LB": 1.0,
+        "UB": 1.0
+      },
+      "tunnel_direction": 3,
+      "set1": {
+        "strike": 94,
+        "dip": 71,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "set2": {
+        "strike": 51,
+        "dip": 46,
+        "Fr_mean": "Sf3",
+        "Fr_LB": "Sf3",
+        "Fr_UB": "Sf3"
+      },
+      "set3": {
+        "strike": 356,
+        "dip": 79,
+        "Fr_mean": "Sf3",
+        "Fr_LB": "Sf3",
+        "Fr_UB": "Sf3"
+      },
+      "length_m": 300.0
+    },
+    {
+      "zone_name": "Zone 5",
+      "rock_domain": "BKD8",
+      "chainage_from": "4+022",
+      "chainage_to": "4+194",
+      "sd": "SD6",
+      "station": "FD - LH",
+      "DRI": {
+        "Mean": 36.02,
+        "LB": 36.02,
+        "UB": 36.02
+      },
+      "CLI": {
+        "Mean": 10.61,
+        "LB": 10.61,
+        "UB": 10.61
+      },
+      "Q": {
+        "Mean": 17.07,
+        "LB": 17.07,
+        "UB": 17.07
+      },
+      "Porosity": {
+        "Mean": 1.0,
+        "LB": 1.0,
+        "UB": 1.0
+      },
+      "tunnel_direction": 3,
+      "set1": {
+        "strike": 94,
+        "dip": 71,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "set2": {
+        "strike": 51,
+        "dip": 46,
+        "Fr_mean": "Sf3",
+        "Fr_LB": "Sf3",
+        "Fr_UB": "Sf3"
+      },
+      "set3": {
+        "strike": 356,
+        "dip": 79,
+        "Fr_mean": "Sf3",
+        "Fr_LB": "Sf3",
+        "Fr_UB": "Sf3"
+      },
+      "length_m": 172.0
+    },
+    {
+      "zone_name": "Zone 4",
+      "rock_domain": "BKD7",
+      "chainage_from": "4+194",
+      "chainage_to": "4+396",
+      "sd": "SD5",
+      "station": "FD - LH",
+      "DRI": {
+        "Mean": 42.39,
+        "LB": 42.39,
+        "UB": 42.39
+      },
+      "CLI": {
+        "Mean": 11.82,
+        "LB": 11.82,
+        "UB": 11.82
+      },
+      "Q": {
+        "Mean": 25.3,
+        "LB": 25.3,
+        "UB": 25.3
+      },
+      "Porosity": {
+        "Mean": 1.0,
+        "LB": 1.0,
+        "UB": 1.0
+      },
+      "tunnel_direction": 3,
+      "set1": {
+        "strike": 103,
+        "dip": 62,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "set2": {
+        "strike": 61,
+        "dip": 81,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "set3": {
+        "strike": 14,
+        "dip": 14,
+        "Fr_mean": "Sf3",
+        "Fr_LB": "Sf3",
+        "Fr_UB": "Sf3"
+      },
+      "length_m": 202.0
+    },
+    {
+      "zone_name": "Zone 3",
+      "rock_domain": "BKD6",
+      "chainage_from": "4+396",
+      "chainage_to": "4+716",
+      "sd": "SD4",
+      "station": "FD - LH",
+      "DRI": {
+        "Mean": 42.39,
+        "LB": 42.39,
+        "UB": 42.39
+      },
+      "CLI": {
+        "Mean": 11.82,
+        "LB": 11.82,
+        "UB": 11.82
+      },
+      "Q": {
+        "Mean": 25.3,
+        "LB": 25.3,
+        "UB": 25.3
+      },
+      "Porosity": {
+        "Mean": 1.0,
+        "LB": 1.0,
+        "UB": 1.0
+      },
+      "tunnel_direction": 4,
+      "set1": {
+        "strike": 102,
+        "dip": 60,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "set2": {
+        "strike": 61,
+        "dip": 81,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "set3": {
+        "strike": 14,
+        "dip": 14,
+        "Fr_mean": "Sf3",
+        "Fr_LB": "Sf3",
+        "Fr_UB": "Sf3"
+      },
+      "length_m": 320.0
+    },
+    {
+      "zone_name": "Zone 2",
+      "rock_domain": "BKD5",
+      "chainage_from": "4+716",
+      "chainage_to": "4+977",
+      "sd": "SD3",
+      "station": "FD - LH",
+      "DRI": {
+        "Mean": 39.21,
+        "LB": 39.21,
+        "UB": 39.21
+      },
+      "CLI": {
+        "Mean": 9.6,
+        "LB": 9.6,
+        "UB": 9.6
+      },
+      "Q": {
+        "Mean": 16.13,
+        "LB": 16.13,
+        "UB": 16.13
+      },
+      "Porosity": {
+        "Mean": 1.0,
+        "LB": 1.0,
+        "UB": 1.0
+      },
+      "tunnel_direction": 5,
+      "set1": {
+        "strike": 94,
+        "dip": 71,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "set2": {
+        "strike": 51,
+        "dip": 46,
+        "Fr_mean": "Sf3",
+        "Fr_LB": "Sf3",
+        "Fr_UB": "Sf3"
+      },
+      "set3": {
+        "strike": 356,
+        "dip": 79,
+        "Fr_mean": "Sf3",
+        "Fr_LB": "Sf3",
+        "Fr_UB": "Sf3"
+      },
+      "length_m": 261.0
+    },
+    {
+      "zone_name": "Zone 1",
+      "rock_domain": "BKD4",
+      "chainage_from": "4+977",
+      "chainage_to": "5+542",
+      "sd": "SD2",
+      "station": "FD - LH",
+      "DRI": {
+        "Mean": 37.57,
+        "LB": 37.57,
+        "UB": 37.57
+      },
+      "CLI": {
+        "Mean": 10.07,
+        "LB": 10.07,
+        "UB": 10.07
+      },
+      "Q": {
+        "Mean": 17.55,
+        "LB": 17.55,
+        "UB": 17.55
+      },
+      "Porosity": {
+        "Mean": 1.0,
+        "LB": 1.0,
+        "UB": 1.0
+      },
+      "tunnel_direction": 6,
+      "set1": {
+        "strike": 94,
+        "dip": 71,
+        "Fr_mean": "Sf4",
+        "Fr_LB": "Sf4",
+        "Fr_UB": "Sf4"
+      },
+      "set2": {
+        "strike": 51,
+        "dip": 46,
+        "Fr_mean": "Sf3",
+        "Fr_LB": "Sf3",
+        "Fr_UB": "Sf3"
+      },
+      "set3": {
+        "strike": 83,
+        "dip": 66,
+        "Fr_mean": "Sf3",
+        "Fr_LB": "Sf3",
+        "Fr_UB": "Sf3"
+      },
+      "length_m": 565.0
+    }
+  ]
+}
