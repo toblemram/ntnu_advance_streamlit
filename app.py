@@ -1,762 +1,1792 @@
-import math
+import copy
+import numpy as np
+import pandas as pd
 import streamlit as st
-from streamlit.components.v1 import html as st_html
 
-st.set_page_config(
-    page_title="TBM Cutterhead Dashboard",
-    page_icon="🚇",
-    layout="wide",
+from src.model_inputs import load_inputs, save_inputs
+from src.zones_model import load_zones, save_zones, default_zone_template
+from src.calculations import (
+    orientation,
+    interpolate_ks,
+    total_fracturing_factor,
+    rock_mass_fracturing_factor,
+    k_porosity,
+    k_dri_bilinear,
+    critical_cutter_thrust,
+    penetration_coefficient,
 )
 
-
-def clamp(x: float, lo: float, hi: float) -> float:
-    return max(lo, min(x, hi))
+import altair as alt
 
 
-def lerp(a: float, b: float, t: float) -> float:
-    return a + (b - a) * t
+# ------------------------------------------------------------
+# HELPER: COMPUTE ALL OUTPUTS FOR ONE ZONE
+# ------------------------------------------------------------
+def compute_zone_outputs(zone: dict, inputs: dict) -> dict:
+    """Compute all model outputs for one zone based on current inputs."""
 
+    rpm = float(inputs["RPM"]["Mean"])
+    thrust_MB = float(inputs["Thrust_MB"]["Mean"])
+    tbm_diameter = float(inputs["TBM_diameter"]["Mean"])
+    cutters = float(inputs["Cutters"]["Mean"])
 
-def lerp_color_hex(c1: str, c2: str, t: float) -> str:
-    """
-    Linear interpolation between two colors in hex format (#RRGGBB).
-    t in [0, 1].
-    """
-    t = clamp(t, 0.0, 1.0)
-    c1_rgb = tuple(int(c1[i: i + 2], 16) for i in (1, 3, 5))
-    c2_rgb = tuple(int(c2[i: i + 2], 16) for i in (1, 3, 5))
-    mixed = tuple(int(round(lerp(a, b, t))) for a, b in zip(c1_rgb, c2_rgb))
-    return "#{:02x}{:02x}{:02x}".format(*mixed)
+    # --- Orientation for 3 joint sets ---
+    o1 = orientation(zone["tunnel_direction"], zone["set1"]["strike"], zone["set1"]["dip"])
+    o2 = orientation(zone["tunnel_direction"], zone["set2"]["strike"], zone["set2"]["dip"])
+    o3 = orientation(zone["tunnel_direction"], zone["set3"]["strike"], zone["set3"]["dip"])
 
+    # --- Fracturing factors ---
+    ks1 = interpolate_ks(zone["set1"]["Fr_mean"], o1)
+    ks2 = interpolate_ks(zone["set2"]["Fr_mean"], o2)
+    ks3 = interpolate_ks(zone["set3"]["Fr_mean"], o3)
 
-# ---------------------------------------------------------
-# MAIN ANIMATION: TBM CUTTERHEAD + MONSTER HEN (fixed window)
-# ---------------------------------------------------------
-def generate_tbm_html(
-    diameter_m: float,
-    rpm: float,
-    cutters: int,
-    mb_kN: float,
-    rmc: float,
-) -> str:
-    """
-    Visualize TBM cutterhead in front view with a monster hen as reference:
-    - Fixed window for the cutterhead, only the disk scales
-    - Rotation based on RPM
-    - Number of cutters
-    - Cutter color based on gross thrust per cutter (M_B)
-    - r_mc ring
-    - Hen is scaled to represent ~8 m height
-    """
-    cutters = max(1, min(cutters, 60))
+    ks_tot = total_fracturing_factor(
+        ks1,
+        ks2,
+        ks3,
+        zone["set1"]["Fr_mean"],
+        zone["set2"]["Fr_mean"],
+        zone["set3"]["Fr_mean"],
+    )
+    ks_rm = rock_mass_fracturing_factor(ks_tot)
+    kpor = k_porosity(zone["Porosity"]["Mean"])
+    kdri = k_dri_bilinear(ks_rm, zone["DRI"]["Mean"])
 
-    # Shared scale: pixels per meter (used both for cutterhead and hen)
-    px_per_meter = 16.0
+    # Equivalent fracturing
+    k_equiv = ks_rm * kdri * kpor
 
-    # Monster hen: 8 m tall in the same scale
-    hen_total_px = 8.0 * px_per_meter  # ~128 px
+    # Cutter diameter factor
+    k_d = 1.0
 
-    # Fixed window for cutterhead card
-    wrapper_size_px = 420
-
-    # Disk size in pixels using same meter scale
-    disc_size_px = diameter_m * px_per_meter
-    # Make sure the largest diameter (20 m) still fits well inside the window
-    disc_size_px = min(disc_size_px, wrapper_size_px - 60)
-
-    # RPM → rotation speed (seconds per revolution)
-    if rpm > 0:
-        period_sec = 60.0 / rpm
-        cutter_animation_style = (
-            f"animation: tbm-spin {period_sec:.2f}s linear infinite;"
-        )
+    # Cutter spacing (mm)
+    if cutters > 0:
+        spacing = tbm_diameter * 1000.0 / (2.0 * cutters)
     else:
-        cutter_animation_style = "animation: none;"
+        spacing = np.nan
 
-    # M_B → cutter color (low thrust = yellow, high = orange/red-ish)
-    MB_MIN, MB_MAX = 200.0, 400.0
-    mb_norm = clamp((mb_kN - MB_MIN) / (MB_MAX - MB_MIN), 0.0, 1.0)
-    cutter_fill_color = lerp_color_hex("#facc15", "#f97316", mb_norm)
-    cutter_stroke_color = lerp_color_hex("#facc15", "#ea580c", mb_norm)
+    if not np.isnan(spacing):
+        k_a_raw = 1.0 + (-0.1 / 15.0) * (spacing - 70.0)
+        k_a = min(k_a_raw, 1.0667)
+    else:
+        k_a = np.nan
 
-    # Geometry in SVG space
-    outer_radius = 45.0
-    rmc_radius = outer_radius * clamp(rmc, 0.0, 1.0)
+    # Equivalent thrust
+    if not np.isnan(k_a):
+        M_ekv = thrust_MB * k_d * k_a
+    else:
+        M_ekv = np.nan
 
-    # Spokes (ribs)
-    spokes = []
-    for i in range(6):
-        angle = 2 * math.pi * i / 6
-        x = 50 + 32 * math.cos(angle)
-        y = 50 + 32 * math.sin(angle)
-        spokes.append(
-            f'<line x1="50" y1="50" x2="{x:.2f}" y2="{y:.2f}" '
-            f'stroke="#111827" stroke-width="3" />'
-        )
+    # Critical cutter thrust (lookup)
+    M1 = critical_cutter_thrust(k_equiv)
 
-    # Cutters along outer ring
-    cutter_circles = []
-    for i in range(cutters):
-        angle = 2 * math.pi * i / cutters
-        x = 50 + 36 * math.cos(angle)
-        y = 50 + 36 * math.sin(angle)
-        cutter_circles.append(
-            f'<circle cx="{x:.2f}" cy="{y:.2f}" r="3.5" '
-            f'fill="{cutter_fill_color}" stroke="{cutter_stroke_color}" stroke-width="1.4" />'
-        )
+    # Penetration coefficient
+    b_val = penetration_coefficient(k_equiv)
 
-    style = f"""
-<style>
-.tbm-ui-root {{
-  background: radial-gradient(circle at 10% 20%, #1f2937 0, #020617 60%);
-  border-radius: 24px;
-  padding: 24px 28px;
-  color: #e5e7eb;
-  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.85);
-  border: 1px solid rgba(148, 163, 184, 0.4);
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
-}}
-.tbm-header {{
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  margin-bottom: 18px;
-}}
-.tbm-header-title {{
-  font-size: 1.1rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}}
-.tbm-header-sub {{
-  font-size: 0.8rem;
-  opacity: 0.75;
-}}
-.tbm-visual-row {{
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  gap: 48px;
-  margin-top: 8px;
-}}
+    # Basic penetration and net penetration
+    if (
+        M_ekv is None
+        or M1 is None
+        or isinstance(M_ekv, str)
+        or isinstance(M1, str)
+        or np.isnan(M_ekv)
+        or np.isnan(M1)
+        or M_ekv <= 0
+        or M1 <= 0
+        or rpm <= 0
+    ):
+        i0 = np.nan
+        net_penetration = 0.0
+    else:
+        i0 = (M_ekv / M1) ** b_val
+        net_penetration = i0 * rpm * 60.0 / 1000.0  # m/h
 
-/* MONSTER HEN */
-.tbm-hen {{
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-}}
-.tbm-hen-body-wrapper {{
-  position: relative;
-  width: 90px;
-  height: {hen_total_px}px;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-}}
-.tbm-hen-body {{
-  position: relative;
-  width: 70px;
-  height: 55px;
-  border-radius: 60px 60px 50px 45px;
-  background: linear-gradient(180deg, #e5e7eb, #9ca3af);
-  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.9);
-  border: 1px solid rgba(148, 163, 184, 0.9);
-}}
-.tbm-hen-wing {{
-  position: absolute;
-  right: 8px;
-  top: 18px;
-  width: 32px;
-  height: 26px;
-  border-radius: 40px 40px 30px 30px;
-  background: radial-gradient(circle at 30% 20%, #f9fafb, #cbd5f5);
-  opacity: 0.9;
-}}
-.tbm-hen-head {{
-  position: absolute;
-  right: -8px;
-  top: calc(100% - 85px);  /* head moved down to sit on the body */
-  width: 30px;
-  height: 30px;
-  border-radius: 999px;
-  background: radial-gradient(circle at 30% 20%, #f9fafb, #d1d5db);
-  box-shadow: 0 0 10px rgba(248, 250, 252, 0.7);
-}}
-.tbm-hen-eye {{
-  position: absolute;
-  right: 8px;
-  top: 9px;
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: #0f172a;
-  box-shadow: 0 0 4px rgba(15, 23, 42, 0.8);
-}}
-.tbm-hen-beak {{
-  position: absolute;
-  right: -4px;
-  top: 12px;
-  width: 0;
-  height: 0;
-  border-top: 5px solid transparent;
-  border-bottom: 5px solid transparent;
-  border-left: 9px solid #f97316;
-}}
-.tbm-hen-comb {{
-  position: absolute;
-  left: 3px;
-  top: -6px;
-  width: 16px;
-  height: 10px;
-  border-radius: 999px;
-  background: #ef4444;
-  box-shadow: 0 0 6px rgba(248, 113, 113, 0.9);
-}}
-.tbm-hen-legs {{
-  position: absolute;
-  bottom: -8px;
-  left: 18px;
-  display: flex;
-  gap: 8px;
-}}
-.tbm-hen-leg {{
-  width: 2px;
-  height: 10px;
-  background: #f97316;
-  box-shadow: 0 0 6px rgba(249, 115, 22, 0.9);
-}}
-.tbm-hen-label {{
-  font-size: 0.75rem;
-  opacity: 0.9;
-}}
-.tbm-hen-caption {{
-  font-size: 0.7rem;
-  opacity: 0.7;
-}}
+    # Boring time (h/m)
+    if net_penetration > 0:
+        boring_time = 1.0 / net_penetration
+    else:
+        boring_time = np.inf
 
-/* CUTTERHEAD */
-.tbm-disk-wrapper {{
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: radial-gradient(circle at 30% 20%, rgba(56, 189, 248, 0.16), transparent 65%);
-  border-radius: 999px;
-  padding: 18px;
-  width: {wrapper_size_px}px;
-  height: {wrapper_size_px}px;
-}}
-.tbm-disk-size {{
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}}
-.tbm-disk-svg {{
-  filter: drop-shadow(0 0 18px rgba(59, 130, 246, 0.7));
-}}
-.tbm-disk-ring {{
-  fill: url(#tbmDiskGradient);
-  stroke: #1e293b;
-  stroke-width: 3;
-}}
-.tbm-disk-rim {{
-  fill: none;
-  stroke: #38bdf8;
-  stroke-width: 1.4;
-  stroke-dasharray: 3 3;
-  opacity: 0.9;
-}}
-.tbm-disk-center {{
-  fill: #020617;
-  stroke: #38bdf8;
-  stroke-width: 2;
-}}
-.tbm-disk-bolt {{
-  fill: #94a3b8;
-}}
-.tbm-disk-cutout {{
-  fill: rgba(15, 23, 42, 0.65);
-}}
-.tbm-rmc-ring {{
-  fill: none;
-  stroke: #a855f7;
-  stroke-width: 1.5;
-  stroke-dasharray: 4 3;
-  opacity: 0.95;
-  filter: drop-shadow(0 0 10px rgba(168, 85, 247, 0.6));
-}}
-.tbm-disk-gauge {{
-  font-size: 0.7rem;
-  opacity: 0.7;
-  margin-top: 6px;
-  text-align: center;
-  line-height: 1.3;
-}}
-.tbm-disk-gauge span {{
-  font-weight: 600;
-  color: #e5e7eb;
-}}
-.tbm-legend {{
-  display: flex;
-  justify-content: center;
-  gap: 18px;
-  margin-top: 6px;
-  font-size: 0.7rem;
-  opacity: 0.75;
-  flex-wrap: wrap;
-}}
-.tbm-dot {{
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  display: inline-block;
-  margin-right: 4px;
-}}
-.tbm-dot-cutter {{
-  background: #fbbf24;
-  box-shadow: 0 0 8px rgba(251, 191, 36, 0.9);
-}}
-.tbm-dot-spoke {{
-  background: #38bdf8;
-}}
-.tbm-dot-rim {{
-  background: #64748b;
-}}
-.tbm-dot-rmc {{
-  background: #a855f7;
-}}
-.tbm-cutterhead {{
-  transform-origin: 50% 50%;
-  transform-box: fill-box;
-  {cutter_animation_style}
-}}
-@keyframes tbm-spin {{
-  from {{ transform: rotate(0deg); }}
-  to {{ transform: rotate(360deg); }}
-}}
-</style>
-"""
+    # Stroke length (m)
+    stroke_length = float(inputs["Stroke_length_ls"]["Mean"])
 
-    html = f"""
-{style}
-<div class="tbm-ui-root">
-  <div class="tbm-header">
-    <div class="tbm-header-title">TBM cutterhead – front view</div>
-    <div class="tbm-header-sub">
-      Fixed window · cutterhead scales · spins with RPM
-    </div>
-  </div>
-  <div class="tbm-visual-row">
-    <div class="tbm-hen">
-      <div class="tbm-hen-body-wrapper">
-        <div class="tbm-hen-body">
-          <div class="tbm-hen-wing"></div>
-        </div>
-        <div class="tbm-hen-head">
-          <div class="tbm-hen-eye"></div>
-          <div class="tbm-hen-beak"></div>
-          <div class="tbm-hen-comb"></div>
-        </div>
-        <div class="tbm-hen-legs">
-          <div class="tbm-hen-leg"></div>
-          <div class="tbm-hen-leg"></div>
-        </div>
-      </div>
-      <div class="tbm-hen-label">Reference monster hen</div>
-      <div class="tbm-hen-caption">≈ 8 m tall in this scale</div>
-    </div>
-    <div class="tbm-disk-wrapper">
-      <div class="tbm-disk-size" style="width: {disc_size_px:.1f}px; height: {disc_size_px:.1f}px;">
-        <svg viewBox="0 0 100 100" class="tbm-disk-svg">
-          <defs>
-            <radialGradient id="tbmDiskGradient" cx="30%" cy="25%" r="70%">
-              <stop offset="0%" stop-color="#1f2937" />
-              <stop offset="45%" stop-color="#020617" />
-              <stop offset="100%" stop-color="#0b1120" />
-            </radialGradient>
-          </defs>
-          <g class="tbm-cutterhead">
-            <circle cx="50" cy="50" r="{outer_radius:.1f}" class="tbm-disk-ring" />
-            <circle cx="50" cy="50" r="43" class="tbm-disk-rim" />
-            {"".join(spokes)}
-            <circle cx="50" cy="50" r="18" class="tbm-disk-cutout" />
-            <circle cx="50" cy="50" r="10.5" class="tbm-disk-center" />
-            <circle cx="50" cy="50" r="3" class="tbm-disk-bolt" />
-            <circle cx="50" cy="50" r="{rmc_radius:.2f}" class="tbm-rmc-ring" />
-            {"".join(cutter_circles)}
-          </g>
-        </svg>
-      </div>
-    </div>
-  </div>
-  <div class="tbm-disk-gauge">
-    <div>
-      <span>{diameter_m:.1f} m</span> cutterhead diameter ·
-      <span>{rpm:.1f} rpm</span> ·
-      <span>{cutters}</span> cutters
-    </div>
-    <div>
-      <span>{mb_kN:.0f} kN/c</span> gross thrust per cutter ·
-      <span>r_mc = {rmc:.2f}</span>
-    </div>
-  </div>
-  <div class="tbm-legend">
-    <div><span class="tbm-dot tbm-dot-cutter"></span>Cutters</div>
-    <div><span class="tbm-dot tbm-dot-spoke"></span>Ribs</div>
-    <div><span class="tbm-dot tbm-dot-rim"></span>Outer ring</div>
-    <div><span class="tbm-dot tbm-dot-rmc"></span>r_mc ring</div>
-  </div>
-</div>
-"""
-    return html
+    # Time related to segment installation
+    if cutters > 0:
+        time_per_segment_installation = tbm_diameter * 1000.0 / (2.0 * cutters)
+    else:
+        time_per_segment_installation = np.nan
+
+    if stroke_length > 0 and not np.isnan(time_per_segment_installation):
+        segment_installation = time_per_segment_installation / (60.0 * stroke_length)
+    else:
+        segment_installation = np.nan
+
+    # Cutter change etc.
+    time_per_changed_cutter = float(inputs["tc"]["Mean"])
+    cutter_ring_life = 3.4853
+    repair_tbm = float(inputs["TTBM"]["Mean"])
+    repair_backup = float(inputs["Tback"]["Mean"])
+    other_time = float(inputs["Tm"]["Mean"])
+
+    if net_penetration > 0 and cutter_ring_life > 0:
+        cutter_time = time_per_changed_cutter / (60.0 * cutter_ring_life * net_penetration)
+    else:
+        cutter_time = np.nan
+
+    # Utilization
+    terms = [boring_time, segment_installation, cutter_time, repair_tbm, repair_backup, other_time]
+
+    if boring_time == np.inf or any(np.isnan(t) for t in terms):
+        utilization = 0.0
+    else:
+        denom = sum(terms)
+        utilization = boring_time / denom if denom > 0 else 0.0
+
+    effective_hours = float(inputs["Effective_hours_Te"]["Mean"])
+    daily_adv = net_penetration * utilization * effective_hours
+
+    return {
+        # Metadata
+        "Zone name": zone["zone_name"],
+        "Tunnel direction": zone["tunnel_direction"],
+        "Length (m)": zone["length_m"],
+
+        # Orientation & fracturing
+        "Orientation Set1": o1,
+        "Orientation Set2": o2,
+        "Orientation Set3": o3,
+        "Ks Set1": ks1,
+        "Ks Set2": ks2,
+        "Ks Set3": ks3,
+        "Ks Total": ks_tot,
+        "Ks Rock Mass": ks_rm,
+        "k_porosity": kpor,
+        "k_dri": kdri,
+        "Equivalent fracturing": k_equiv,
+
+        # Thrust & penetration
+        "k_d (cutter diameter)": k_d,
+        "k_a (cutter spacing)": k_a,
+        "Equivalent thrust": M_ekv,
+        "Critical cutter thrust (M1)": M1,
+        "Penetration coefficient (b)": b_val,
+        "Basic penetration (i0)": i0,
+        "Net penetration (m/h)": net_penetration,
+
+        # Time components
+        "Boring time": boring_time,
+        "Stroke length (m)": stroke_length,
+        "Time per segment installation": time_per_segment_installation,
+        "Segment installation time": segment_installation,
+        "Time per changed cutter": time_per_changed_cutter,
+        "Cutter ring life": cutter_ring_life,
+        "Cutter time": cutter_time,
+        "Repair and service of TBM": repair_tbm,
+        "Repair and service of backup": repair_backup,
+        "Other time consumption": other_time,
+        "Utilization": utilization,
+        "Effective working hours per day": effective_hours,
+
+        # Result
+        "Daily advancement (m/day)": daily_adv,
+    }
 
 
-# ---------------------------------------------------------
-# POWER METER FOR P_tbm
-# ---------------------------------------------------------
-def generate_power_html(power_kw: float, rpm: float) -> str:
-    max_kw = 8000.0
-    ratio = clamp(power_kw / max_kw, 0.0, 1.0)
-    rpm_norm = clamp(rpm / 12.0, 0.0, 1.0)
-    est_load_pct = clamp((ratio * 0.6 + rpm_norm * 0.4) * 100, 0, 100)
+# ------------------------------------------------------------
+# HELPER: allowed range for one parameter (target analysis)
+# ------------------------------------------------------------
 
-    style = """
-<style>
-.tbm-power-card {
-  background: radial-gradient(circle at 0% 0%, rgba(52, 211, 153, 0.2), rgba(15, 23, 42, 0.9));
-  border-radius: 18px;
-  padding: 14px 16px 16px;
-  border: 1px solid rgba(52, 211, 153, 0.6);
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.7);
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-  font-size: 0.8rem;
-}
-.tbm-power-main {
-  font-size: 1.1rem;
-  font-weight: 600;
-  margin-bottom: 4px;
-}
-.tbm-power-sub {
-  opacity: 0.8;
-  margin-bottom: 8px;
-}
-.tbm-power-bar {
-  width: 100%;
-  height: 10px;
-  border-radius: 999px;
-  overflow: hidden;
-  background: linear-gradient(90deg, #020617, #020617);
-  border: 1px solid rgba(148, 163, 184, 0.7);
-}
-.tbm-power-bar-fill {
-  height: 100%;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #22c55e, #eab308, #ef4444);
-  box-shadow: 0 0 12px rgba(52, 211, 153, 0.8);
-}
-.tbm-power-footer {
-  margin-top: 6px;
-  display: flex;
-  justify-content: space-between;
-  font-size: 0.7rem;
-  opacity: 0.8;
-}
-</style>
-"""
-    html = f"""
-{style}
-<div class="tbm-power-card">
-  <div class="tbm-power-main">{power_kw:.0f} kW</div>
-  <div class="tbm-power-sub">Installed power for cutterhead</div>
-  <div class="tbm-power-bar">
-    <div class="tbm-power-bar-fill" style="width: {ratio*100:.1f}%;"></div>
-  </div>
-  <div class="tbm-power-footer">
-    <span>0 – {max_kw:.0f} kW</span>
-    <span>Estimated load: {est_load_pct:.0f}%</span>
-  </div>
-</div>
-"""
-    return html
+def compute_allowed_range_for_param(
+    param_name: str,
+    selected_zone: dict,
+    base_inputs: dict,
+    current_values: dict,
+    target_output_name: str,
+    target_min: float,
+    target_max: float,
+    samples: int = 40,
+):
+    """
+    Finner ca. intervall [x_min, x_max] for én input-parameter der valgt output
+    holder seg innenfor [target_min, target_max], gitt at alle andre parametre
+    står på 'current_values'.
 
+    Søket gjøres i et intervall tilsvarende slider-området, ikke bare LB/UB.
+    Returnerer (None, None) hvis ingen verdi i området gir output i målområdet.
+    """
 
-# ---------------------------------------------------------
-# CUTTER ZOOM FOR d_c
-# ---------------------------------------------------------
-def generate_cutter_zoom_html(dc_inch: float) -> str:
-    dc_mm = dc_inch * 25.4
+    # Bruk samme logikk som i TAB 5 for slider-range
+    base_mean = float(base_inputs[param_name]["Mean"])
 
-    # Normalize 10–25" → radius 20–45 in SVG units
-    inch_min, inch_max = 10.0, 25.0
-    t = clamp((dc_inch - inch_min) / (inch_max - inch_min), 0.0, 1.0)
-    radius = 20 + t * 25
+    if base_mean > 0:
+        search_min = 0.0
+        search_max = base_mean * 2.0
+    elif base_mean < 0:
+        search_min = base_mean * 2.0
+        search_max = 0.0
+    else:
+        search_min = -1.0
+        search_max = 1.0
 
-    style = """
-<style>
-.tbm-cutter-card {
-  background: radial-gradient(circle at 100% 0%, rgba(96, 165, 250, 0.24), rgba(15, 23, 42, 0.95));
-  border-radius: 18px;
-  padding: 12px 14px 14px;
-  border: 1px solid rgba(59, 130, 246, 0.7);
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.7);
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-  font-size: 0.78rem;
-}
-.tbm-cutter-title {
-  font-weight: 600;
-  margin-bottom: 4px;
-}
-.tbm-cutter-svg {
-  display: block;
-  margin: 4px auto 2px;
-}
-.tbm-cutter-caption {
-  opacity: 0.8;
-  text-align: center;
-  margin-top: 4px;
-}
-</style>
-"""
-    svg = f"""
-{style}
-<div class="tbm-cutter-card">
-  <div class="tbm-cutter-title">Cutter diameter</div>
-  <svg viewBox="0 0 120 120" class="tbm-cutter-svg" width="120" height="120">
-    <defs>
-      <radialGradient id="tbmCutterGrad" cx="30%" cy="25%" r="70%">
-        <stop offset="0%" stop-color="#111827" />
-        <stop offset="55%" stop-color="#020617" />
-        <stop offset="100%" stop-color="#020617" />
-      </radialGradient>
-    </defs>
+    if search_max <= search_min:
+        return None, None
 
-    <circle cx="60" cy="60" r="{radius:.1f}" fill="url(#tbmCutterGrad)"
-            stroke="#1f2937" stroke-width="2" />
-    <circle cx="60" cy="60" r="{radius*0.3:.1f}" fill="#020617"
-            stroke="#38bdf8" stroke-width="1.5" />
-    <circle cx="60" cy="60" r="2.5" fill="#e5e7eb" />
+    xs = np.linspace(search_min, search_max, samples)
+    allowed_xs = []
 
-    <circle cx="{60 + radius*0.55:.1f}" cy="60" r="2" fill="#64748b" />
-    <circle cx="{60 - radius*0.55:.1f}" cy="60" r="2" fill="#64748b" />
+    for x in xs:
+        # Kopi av inputs
+        mod_inputs = copy.deepcopy(base_inputs)
 
-    <line x1="25" y1="95" x2="95" y2="95" stroke="#e5e7eb" stroke-width="1" />
-    <line x1="25" y1="92" x2="25" y2="98" stroke="#e5e7eb" stroke-width="1" />
-    <line x1="95" y1="92" x2="95" y2="98" stroke="#e5e7eb" stroke-width="1" />
-    <text x="60" y="89" text-anchor="middle" fill="#e5e7eb" font-size="8">
-      {dc_inch:.1f}"  (~{dc_mm:.0f} mm)
-    </text>
-  </svg>
-  <div class="tbm-cutter-caption">
-    Scaled cutter in front view. The line shows the cutter diameter.
-  </div>
-</div>
-"""
-    return svg
+        # Sett alle parametere til nåværende slider-verdier
+        for p, val in current_values.items():
+            mod_inputs[p]["Mean"] = float(val)
+
+        # Variér bare den ene parameteren vi analyserer
+        mod_inputs[param_name]["Mean"] = float(x)
+
+        # Trygg beregning av output
+        try:
+            out = compute_zone_outputs(selected_zone, mod_inputs)
+            y = out.get(target_output_name, None)
+        except Exception:
+            # Hvis modellen knekker for en rar kombinasjon (deling på 0 etc),
+            # hopper vi bare over den verdien.
+            continue
+
+        # Filtrer bort ugyldige outputs
+        if y is None or not isinstance(y, (int, float)):
+            continue
+        if np.isnan(y) or np.isinf(y):
+            continue
+
+        # Ligger output innenfor målområdet?
+        if target_min <= y <= target_max:
+            allowed_xs.append(x)
+
+    if not allowed_xs:
+        return None, None
+
+    return float(min(allowed_xs)), float(max(allowed_xs))
 
 
-# ---------------------------------------------------------
-# STROKE ANIMATION FOR l_s
-# ---------------------------------------------------------
-def generate_stroke_html(ls_m: float) -> str:
-    ls_min, ls_max = 0.5, 3.0
-    t = clamp((ls_m - ls_min) / (ls_max - ls_min), 0.0, 1.0)
-    track_width = 140 + t * 80  # 140–220 px
 
-    style = """
-<style>
-.tbm-stroke-card {
-  background: radial-gradient(circle at 0% 100%, rgba(248, 250, 252, 0.06), rgba(15, 23, 42, 0.96));
-  border-radius: 18px;
-  padding: 12px 14px 14px;
-  border: 1px solid rgba(148, 163, 184, 0.8);
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.7);
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-  font-size: 0.78rem;
-}
-.tbm-stroke-title {
-  font-weight: 600;
-  margin-bottom: 6px;
-}
-.tbm-stroke-track-outer {
-  display: flex;
-  justify-content: center;
-  margin-bottom: 4px;
-}
-.tbm-stroke-track-inner {
-  height: 16px;
-  background: linear-gradient(90deg, #020617, #020617);
-  border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.8);
-  position: relative;
-  overflow: hidden;
-}
-.tbm-stroke-block {
-  width: 28px;
-  height: 12px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #22c55e, #0ea5e9);
-  box-shadow: 0 0 10px rgba(56, 189, 248, 0.9);
-  position: absolute;
-  top: 1px;
-  left: 0;
-  animation: tbm-stroke-move 1.7s ease-in-out infinite;
-}
-.tbm-stroke-caption {
-  opacity: 0.8;
-  text-align: center;
-  font-size: 0.7rem;
-}
-@keyframes tbm-stroke-move {
-  0%   { transform: translateX(0); }
-  50%  { transform: translateX(100%); }
-  100% { transform: translateX(0); }
-}
-</style>
-"""
-    html = f"""
-{style}
-<div class="tbm-stroke-card">
-  <div class="tbm-stroke-title">Stroke length</div>
-  <div class="tbm-stroke-track-outer">
-    <div class="tbm-stroke-track-inner" style="width: {track_width:.1f}px;">
-      <div class="tbm-stroke-block"></div>
-    </div>
-  </div>
-  <div class="tbm-stroke-caption">
-    Stroke: {ls_m:.2f} m · relative length: {t*100:.0f} %
-  </div>
-</div>
-"""
-    return html
+st.set_page_config(page_title="NTNU TBM Tool", layout="wide") 
+st.title("NTNU TBM Tunneling Model Prototype") 
+tab_machine, tab_zones, tab_output, tab_analysis, tab_target, tab_cutter, tab_perf, tab_time, tab_rock_perf, tab_profile = st.tabs( [ "Machine Input", "Zones Input", "Outputs", "Sensitivity analysis", "Target analysis", "Cutter life & consumption", "TBM performance envelope", "Time budget & utilization", "Rock vs performance", "Longitudinal profile", ] )
 
 
-# ---------------------------------------------------------
-# STREAMLIT APP
-# ---------------------------------------------------------
-def main():
-    st.markdown(
-        "<h1 style='text-align:center;'>🚇 Tunnel Boring Machine – Cutterhead input dashboard</h1>",
-        unsafe_allow_html=True,
-    )
-    st.caption(
-        "Adjust TBM parameters. The cutterhead, monster hen, power meter, cutter zoom and stroke animation all update live."
+# ------------------------------------------------------------
+# TAB 1: MACHINE PARAMETERS
+# ------------------------------------------------------------
+with tab_machine:
+    st.header("Machine parameters (LB / Mean / UB)")
+
+    inputs = load_inputs()
+    updated = False
+
+    for var_name, values in inputs.items():
+        st.subheader(var_name)
+
+        col1, col2, col3 = st.columns(3)
+        lb = col1.number_input(f"{var_name} – LB", value=float(values["LB"]))
+        mean = col2.number_input(f"{var_name} – Mean", value=float(values["Mean"]))
+        ub = col3.number_input(f"{var_name} – UB", value=float(values["UB"]))
+
+        if (lb, mean, ub) != (values["LB"], values["Mean"], values["UB"]):
+            inputs[var_name] = {"LB": lb, "Mean": mean, "UB": ub}
+            updated = True
+
+    if st.button("💾 Save machine parameters"):
+        save_inputs(inputs)
+        st.success("Saved!")
+
+    if updated:
+        save_inputs(inputs)
+
+
+# ------------------------------------------------------------
+# TAB 2: ZONES INPUT
+# ------------------------------------------------------------
+with tab_zones:
+    st.header("Zone configuration")
+
+    zone_data = load_zones()
+    zones = zone_data.get("zones", [])
+
+    num_zones = st.number_input(
+        "Number of zones",
+        min_value=1,
+        max_value=50,
+        value=len(zones) if len(zones) > 0 else 1,
     )
 
-    col_controls, col_visual = st.columns([1, 2])
+    while len(zones) < num_zones:
+        zones.append(default_zone_template())
+    while len(zones) > num_zones:
+        zones.pop()
 
-    # ----------- LEFT: INPUTS ----------
-    with col_controls:
-        st.markdown("### Parameters")
+    st.divider()
 
-        diameter = st.slider(
-            "Cutterhead diameter d_tbm [m]",
-            min_value=6.0,
-            max_value=20.0,
-            value=7.1,
-            step=0.1,
+    for i, zone in enumerate(zones):
+        st.subheader(f"Zone {i+1}")
+
+        zone["zone_name"] = st.text_input(f"Zone name {i+1}", value=zone["zone_name"])
+        zone["rock_domain"] = st.text_input(f"Rock domain {i+1}", value=zone["rock_domain"])
+
+        colA, colB = st.columns(2)
+        zone["chainage_from"] = colA.text_input(
+            f"Chainage from {i+1}", value=zone["chainage_from"]
+        )
+        zone["chainage_to"] = colB.text_input(
+            f"Chainage to {i+1}", value=zone["chainage_to"]
         )
 
-        rpm = st.slider(
-            "Cutterhead RPM [rpm]",
-            min_value=0.0,
-            max_value=12.0,
-            value=6.0,
-            step=0.1,
+        zone["sd"] = st.text_input(f"SD {i+1}", value=zone["sd"])
+        zone["station"] = st.text_input(f"Station {i+1}", value=zone["station"])
+
+        st.markdown("### Rock parameters")
+        for rock_key in ["DRI", "CLI", "Q", "Porosity"]:
+            st.markdown(f"**{rock_key}**")
+            c1, c2, c3 = st.columns(3)
+            zone[rock_key]["Mean"] = c1.number_input(
+                f"{rock_key} Mean {i+1}", value=float(zone[rock_key]["Mean"])
+            )
+            zone[rock_key]["LB"] = c2.number_input(
+                f"{rock_key} LB {i+1}", value=float(zone[rock_key]["LB"])
+            )
+            zone[rock_key]["UB"] = c3.number_input(
+                f"{rock_key} UB {i+1}", value=float(zone[rock_key]["UB"])
+            )
+
+        zone["tunnel_direction"] = st.number_input(
+            f"Tunnel direction {i+1}",
+            value=float(zone["tunnel_direction"]),
         )
 
-        cutters = st.slider(
-            "Number of cutters N_tbm [-]",
-            min_value=20,
-            max_value=60,
-            value=45,
-            step=1,
+        st.markdown("### Joint sets (strike, dip, Fr class)")
+        for set_key in ["set1", "set2", "set3"]:
+            st.markdown(f"**{set_key}**")
+            c1, c2, c3, c4, c5 = st.columns(5)
+            zone[set_key]["strike"] = c1.number_input(
+                f"{set_key} strike {i+1}", value=float(zone[set_key]["strike"])
+            )
+            zone[set_key]["dip"] = c2.number_input(
+                f"{set_key} dip {i+1}", value=float(zone[set_key]["dip"])
+            )
+            zone[set_key]["Fr_mean"] = c3.text_input(
+                f"{set_key} Fr_mean {i+1}", value=zone[set_key]["Fr_mean"]
+            )
+            zone[set_key]["Fr_LB"] = c4.text_input(
+                f"{set_key} Fr_LB {i+1}", value=zone[set_key]["Fr_LB"]
+            )
+            zone[set_key]["Fr_UB"] = c5.text_input(
+                f"{set_key} Fr_UB {i+1}", value=zone[set_key]["Fr_UB"]
+            )
+
+        zone["length_m"] = st.number_input(
+            f"Length [m] zone {i+1}", value=float(zone["length_m"])
         )
 
-        mb = st.slider(
-            "Gross thrust per cutter M_B [kN/c]",
-            min_value=200,
-            max_value=400,
-            value=300,
-            step=10,
+        st.divider()
+
+    if st.button("💾 Save zones"):
+        save_zones({"zones": zones})
+        st.success("Zones saved!")
+
+
+# ------------------------------------------------------------
+# TAB 3: OUTPUTS (PER ZONE, VERTICAL)
+# ------------------------------------------------------------
+with tab_output:
+    st.header("Zone outputs")
+
+    zone_data = load_zones()
+    zones = zone_data.get("zones", [])
+
+    if len(zones) == 0:
+        st.warning("No zones defined.")
+    else:
+        inputs = load_inputs()
+
+        keys_to_show = [
+            "Zone name",
+            "Orientation Set1",
+            "Orientation Set2",
+            "Orientation Set3",
+            "Ks Total",
+            "Ks Rock Mass",
+            "Equivalent fracturing",
+            "Net penetration (m/h)",
+            "Utilization",
+            "Daily advancement (m/day)",
+            "Length (m)",
+        ]
+
+        for idx, z in enumerate(zones):
+            out = compute_zone_outputs(z, inputs)
+            rows = []
+            for key in keys_to_show:
+                rows.append({"Parameter": key, "Value": out.get(key, "")})
+
+            df_zone = pd.DataFrame(rows)
+            df_zone["Value"] = df_zone["Value"].astype(str)
+
+            zone_title = out.get("Zone name") or f"Zone {idx+1}"
+            st.subheader(f"Zone: {zone_title}")
+            st.dataframe(df_zone, width="stretch")
+
+# ------------------------------------------------------------
+# TAB 4: SENSITIVITY ANALYSIS (multi-output, with colors)
+# ------------------------------------------------------------
+with tab_analysis:
+    st.header("Sensitivity analysis of input parameters")
+
+    zone_data = load_zones()
+    zones = zone_data.get("zones", [])
+
+    if len(zones) == 0:
+        st.warning("No zones defined – please define zones first in the 'Zones Input' tab.")
+    else:
+        inputs = load_inputs()
+
+        # Select zone to analyse
+        zone_labels = [
+            f"{i+1}: {z['zone_name']}" if z.get("zone_name") else f"Zone {i+1}"
+            for i, z in enumerate(zones)
+        ]
+        selected_zone_label = st.selectbox("Select zone for analysis", zone_labels, index=0)
+        selected_index = zone_labels.index(selected_zone_label)
+        selected_zone = zones[selected_index]
+
+        # Baseline outputs for selected zone
+        baseline_outputs = compute_zone_outputs(selected_zone, inputs)
+
+        # Only numeric outputs
+        numeric_output_keys = [
+            k for k, v in baseline_outputs.items() if isinstance(v, (int, float))
+        ]
+
+        # Default outputs: try these first
+        default_outputs = [
+            name for name in ["Net penetration (m/h)", "Daily advancement (m/day)"]
+            if name in numeric_output_keys
+        ]
+        if not default_outputs and numeric_output_keys:
+            default_outputs = [numeric_output_keys[0]]
+
+        selected_outputs = st.multiselect(
+            "Select output(s) as function of input",
+            numeric_output_keys,
+            default=default_outputs,
         )
 
-        p_tbm = st.slider(
-            "Installed power P_tbm [kW]",
-            min_value=1000,
-            max_value=8000,
-            value=3500,
-            step=100,
+        if not selected_outputs:
+            st.warning("Select at least one output to run the analysis.")
+            st.stop()
+
+        baseline_values = {out: baseline_outputs[out] for out in selected_outputs}
+
+        st.subheader("Baseline values for selected outputs")
+        baseline_df = pd.DataFrame(
+            [{"Output": out, "Baseline value": baseline_values[out]} for out in selected_outputs]
+        )
+        st.dataframe(baseline_df, width="stretch")
+
+        # Input parameters that can be varied
+        param_names = list(inputs.keys())
+        default_params = [p for p in ["RPM", "Thrust_MB", "TBM_diameter", "Cutters"] if p in param_names]
+
+        selected_params = st.multiselect(
+            "Select one or more input parameters to vary",
+            param_names,
+            default=default_params,
         )
 
-        dc_inch = st.slider(
-            "Cutter diameter d_c [inch]",
-            min_value=10.0,
-            max_value=25.0,
-            value=19.0,
-            step=0.5,
+        col_range, col_steps = st.columns(2)
+        pct_max = col_range.slider(
+            "Maximum variation (± %)",
+            min_value=5,
+            max_value=50,
+            value=20,
+            step=5,
+            help="Steps will be created between - and + this percentage.",
         )
 
-        ls = st.slider(
-            "Stroke length l_s [m]",
-            min_value=0.5,
-            max_value=3.0,
-            value=1.8,
-            step=0.1,
+        n_steps = col_steps.slider(
+            "Number of steps between - and +",
+            min_value=3,
+            max_value=11,
+            value=5,
+            step=2,
+            help="Should be an odd number to include 0 % (baseline).",
         )
 
-        rmc = st.slider(
-            "Relative cutter position r_mc [-]",
-            min_value=0.40,
-            max_value=0.90,
-            value=0.59,
-            step=0.01,
+        st.caption(
+            "Note: For rock classes (Sf1, Sf2, ...) you should ideally move one class up/down, "
+            "not use percentage change. This tab currently only handles continuous machine "
+            "parameters (RPM, Thrust_MB, etc.)."
         )
 
-        # Derived: total thrust
-        total_thrust = mb * cutters  # kN
-        total_thrust_str = f"{total_thrust:,.0f}".replace(",", " ")
-
-        st.markdown("### Summary")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.metric("Cutterhead diameter", f"{diameter:.1f} m")
-            st.metric("Cutters", f"{cutters}")
-        with c2:
-            st.metric("RPM", f"{rpm:.1f}")
-            if rpm > 0:
-                period = 60.0 / rpm
-                st.metric("Rotation period", f"{period:.1f} s")
+        if st.button("Run detailed sensitivity analysis"):
+            if not selected_params:
+                st.warning("Select at least one input parameter.")
             else:
-                st.metric("Rotation period", "∞")
-        with c3:
-            st.metric("M_B", f"{mb} kN/c")
-            st.metric("Total thrust", f"{total_thrust_str} kN")
+                # Grid of % changes, e.g. [-20, -10, 0, 10, 20]
+                pct_grid = np.linspace(-pct_max, pct_max, n_steps)
 
-        c4, c5, c6 = st.columns(3)
-        with c4:
-            st.metric("P_tbm", f"{p_tbm} kW")
-        with c5:
-            st.metric("d_c", f"{dc_inch:.1f} in")
-        with c6:
-            st.metric("l_s", f"{ls:.2f} m")
+                detail_records = []
 
-    # ----------- RIGHT: VISUALS ----------
-    with col_visual:
-        st.markdown("### Cutterhead and monster hen")
-        st_html(generate_tbm_html(diameter, rpm, cutters, mb, rmc), height=650)
+                for p in selected_params:
+                    base_val = float(inputs[p]["Mean"])
 
-        st.markdown("### Power, cutter and stroke")
-        pcol, ccol, scol = st.columns(3)
+                    for pct_change in pct_grid:
+                        factor = 1.0 + pct_change / 100.0
+                        new_val = base_val * factor
 
-        with pcol:
-            st_html(generate_power_html(p_tbm, rpm), height=220)
+                        # Copy of inputs with only one parameter changed
+                        mod_inputs = copy.deepcopy(inputs)
+                        mod_inputs[p]["Mean"] = new_val
 
-        with ccol:
-            st_html(generate_cutter_zoom_html(dc_inch), height=260)
+                        out = compute_zone_outputs(selected_zone, mod_inputs)
 
-        with scol:
-            st_html(generate_stroke_html(ls), height=240)
+                        for out_name in selected_outputs:
+                            val = out[out_name]
+                            base_out = baseline_values[out_name]
+
+                            if base_out != 0:
+                                delta_pct = (val - base_out) / base_out * 100.0
+                            else:
+                                delta_pct = np.nan
+
+                            detail_records.append(
+                                {
+                                    "Parameter": p,
+                                    "Output": out_name,
+                                    "delta_input_pct": pct_change,
+                                    "input_value": new_val,
+                                    "output_value": val,
+                                    "delta_output_pct": delta_pct,
+                                }
+                            )
+
+                detail_df = pd.DataFrame(detail_records)
+
+                if detail_df.empty:
+                    st.warning("No rows in sensitivity analysis – check that you have selected parameters/outputs.")
+                    st.stop()
+
+                # Ensure numeric types
+                num_cols_detail = [
+                    "delta_input_pct",
+                    "input_value",
+                    "output_value",
+                    "delta_output_pct",
+                ]
+                for c in num_cols_detail:
+                    detail_df[c] = pd.to_numeric(detail_df[c], errors="coerce")
+
+                st.subheader("Detailed sensitivity matrix")
+                st.dataframe(detail_df, width="stretch")
+
+                # -------------------------
+                # Summary matrix per parameter & output
+                # -------------------------
+                summary_rows = []
+                col_minus = f"Δ output ({-pct_max} %) [ % ]"
+                col_plus = f"Δ output (+{pct_max} %) [ % ]"
+                col_sens = "Sensitivity index [Δout% / Δin%]"
+
+                for p in selected_params:
+                    sub_p = detail_df[detail_df["Parameter"] == p].copy()
+
+                    for out_name in selected_outputs:
+                        sub = sub_p[sub_p["Output"] == out_name].copy()
+
+                        sub_minus = sub[sub["delta_input_pct"] == -pct_max]
+                        sub_plus = sub[sub["delta_input_pct"] == pct_max]
+
+                        if sub_minus.empty or sub_plus.empty:
+                            continue
+
+                        d_minus = float(sub_minus["delta_output_pct"].iloc[0])
+                        d_plus = float(sub_plus["delta_output_pct"].iloc[0])
+
+                        base_out = baseline_values[out_name]
+
+                        sens_index = (d_plus - d_minus) / (2.0 * pct_max) if pct_max != 0 else np.nan
+
+                        summary_rows.append(
+                            {
+                                "Parameter": p,
+                                "Output": out_name,
+                                "Baseline input": float(inputs[p]["Mean"]),
+                                "Baseline output": base_out,
+                                col_minus: d_minus,
+                                col_plus: d_plus,
+                                col_sens: sens_index,
+                            }
+                        )
+
+                summary_df = pd.DataFrame(summary_rows)
+
+                if summary_df.empty:
+                    st.warning("No summary data – check that the outputs actually change.")
+                    st.stop()
+
+                for c in ["Baseline input", "Baseline output", col_minus, col_plus, col_sens]:
+                    if c in summary_df.columns:
+                        summary_df[c] = pd.to_numeric(summary_df[c], errors="coerce")
+
+                st.subheader("Summary matrix (one row per parameter per output)")
+                st.dataframe(summary_df, width="stretch")
+
+                # -------------------------
+                # Plot 1: curves (Δ output vs Δ input) for selected parameter
+                # -------------------------
+                st.subheader("Sensitivity curves (Δ output [%] vs Δ input [%])")
+
+                import altair as alt
+
+                param_to_plot = st.selectbox(
+                    "Select parameter for curve plot",
+                    selected_params,
+                    index=0,
+                )
+
+                plot_sub = detail_df[detail_df["Parameter"] == param_to_plot].copy()
+                plot_sub = plot_sub.dropna(subset=["delta_input_pct", "delta_output_pct"])
+
+                if plot_sub.empty:
+                    st.info("No data for selected parameter.")
+                else:
+                    plot_sub["output_name"] = plot_sub["Output"].astype(str)
+
+                    line_chart = (
+                        alt.Chart(plot_sub)
+                        .mark_line(point=True)
+                        .encode(
+                            x=alt.X("delta_input_pct:Q", title="Δ input [%]"),
+                            y=alt.Y("delta_output_pct:Q", title="Δ output [%]"),
+                            color=alt.Color("output_name:N", title="Output"),
+                            tooltip=[
+                                "Parameter",
+                                "output_name",
+                                "delta_input_pct",
+                                "output_value",
+                                "delta_output_pct",
+                            ],
+                        )
+                        .properties(width=700, height=400)
+                    )
+
+                    st.altair_chart(line_chart)
+
+                # -------------------------
+                # Plot 2: tornado – who influences most?
+                # -------------------------
+                st.subheader("Relative influence (tornado-style plot)")
+
+                if not summary_df.empty:
+                    tornado_df = summary_df[
+                        ["Parameter", "Output", col_minus, col_plus]
+                    ].copy()
+
+                    tornado_df[col_minus] = pd.to_numeric(tornado_df[col_minus], errors="coerce")
+                    tornado_df[col_plus] = pd.to_numeric(tornado_df[col_plus], errors="coerce")
+
+                    tornado_df["max_delta_output"] = tornado_df[[col_minus, col_plus]].abs().max(axis=1)
+                    tornado_df = tornado_df.replace([np.inf, -np.inf], np.nan)
+                    tornado_df = tornado_df.dropna(subset=["max_delta_output"])
+
+                    if tornado_df.empty:
+                        st.info("No valid Δ output values (baseline may be 0 for all outputs).")
+                    else:
+                        tornado_df["param"] = tornado_df["Parameter"].astype(str)
+                        tornado_df["out_name"] = tornado_df["Output"].astype(str)
+                        tornado_df["label"] = tornado_df["param"] + " – " + tornado_df["out_name"]
+                        tornado_df = tornado_df.sort_values("max_delta_output", ascending=True)
+
+                        tornado_chart = (
+                            alt.Chart(tornado_df)
+                            .mark_bar()
+                            .encode(
+                                x=alt.X(
+                                    "max_delta_output:Q",
+                                    title="Maximum absolute Δ output [%]",
+                                ),
+                                y=alt.Y(
+                                    "label:N",
+                                    sort="-x",
+                                    title="Parameter / Output",
+                                ),
+                                color=alt.Color("param:N", title="Parameter"),
+                                tooltip=[
+                                    "param",
+                                    "out_name",
+                                    "max_delta_output",
+                                    col_minus,
+                                    col_plus,
+                                ],
+                            )
+                            .properties(width=700, height=400)
+                        )
+
+                        st.altair_chart(tornado_chart)
+
+                # ----------------------------------------------------
+                # NEW: Heatmap of input–output sensitivity
+                # ----------------------------------------------------
+                st.subheader("Input–Output sensitivity heatmap")
+
+                # We already computed the sensitivity index per (Parameter, Output) in summary_df
+                if summary_df.empty:
+                    st.info("No sensitivity data available for heatmap.")
+                else:
+                    # Long-form dataframe with Parameter, Output, Sensitivity
+                    heat_long = summary_df[["Parameter", "Output", col_sens]].copy()
+                    heat_long = heat_long.rename(columns={col_sens: "Sensitivity"})
+                    heat_long = heat_long.dropna(subset=["Sensitivity"])
+
+                    if heat_long.empty:
+                        st.info("No valid sensitivity values to show in the heatmap.")
+                    else:
+                        # For inspection also show matrix format
+                        heat_matrix = heat_long.pivot(
+                            index="Parameter", columns="Output", values="Sensitivity"
+                        )
+                        st.dataframe(heat_matrix, width="stretch")
+
+                        # Altair heatmap
+                        heat_chart = (
+                            alt.Chart(heat_long)
+                            .mark_rect()
+                            .encode(
+                                x=alt.X("Output:N", title="Output"),
+                                y=alt.Y("Parameter:N", title="Input parameter"),
+                                color=alt.Color(
+                                    "Sensitivity:Q",
+                                    title="Sensitivity [Δout% / Δin%]",
+                                    scale=alt.Scale(scheme="redblue", domainMid=0),
+                                ),
+                                tooltip=[
+                                    alt.Tooltip("Parameter:N", title="Parameter"),
+                                    alt.Tooltip("Output:N", title="Output"),
+                                    alt.Tooltip("Sensitivity:Q", title="Sensitivity", format=".3f"),
+                                ],
+                            )
+                            .properties(width=700, height=400)
+                        )
+
+                        st.altair_chart(heat_chart, use_container_width=False)
 
 
-if __name__ == "__main__":
-    main()
+
+# ------------------------------------------------------------
+# TAB 5: TARGET ANALYSIS (target range on one output)
+# ------------------------------------------------------------
+with tab_target:
+    st.header("Target analysis for a selected output")
+
+    zone_data = load_zones()
+    zones = zone_data.get("zones", [])
+
+    if len(zones) == 0:
+        st.warning("No zones defined – please define zones first in the 'Zones Input' tab.")
+    else:
+        base_inputs = load_inputs()
+
+        # Select zone
+        zone_labels = [
+            f"{i+1}: {z['zone_name']}" if z.get("zone_name") else f"Zone {i+1}"
+            for i, z in enumerate(zones)
+        ]
+        selected_zone_label = st.selectbox("Select zone", zone_labels, index=0)
+        selected_index = zone_labels.index(selected_zone_label)
+        selected_zone = zones[selected_index]
+
+        # Current input values (session_state or Mean)
+        param_names = list(base_inputs.keys())
+        current_values = {
+            p: float(st.session_state.get(f"target_range_{p}", base_inputs[p]["Mean"]))
+            for p in param_names
+        }
+
+        # Compute current outputs
+        current_inputs = copy.deepcopy(base_inputs)
+        for p, val in current_values.items():
+            current_inputs[p]["Mean"] = val
+        outputs_now = compute_zone_outputs(selected_zone, current_inputs)
+
+        # Numeric outputs
+        numeric_output_keys = [k for k, v in outputs_now.items() if isinstance(v, (int, float))]
+
+        if not numeric_output_keys:
+            st.warning("No numeric outputs available for analysis.")
+            st.stop()
+
+        default_out = (
+            "Daily advancement (m/day)"
+            if "Daily advancement (m/day)" in numeric_output_keys
+            else numeric_output_keys[0]
+        )
+
+        # Remember previous output to reset min/max when it changes
+        prev_output = st.session_state.get("target_output_select", default_out)
+
+        target_output_name = st.selectbox(
+            "Select output to define target range for",
+            numeric_output_keys,
+            index=numeric_output_keys.index(prev_output)
+            if prev_output in numeric_output_keys
+            else numeric_output_keys.index(default_out),
+            key="target_output_select",
+        )
+
+        y_now = float(outputs_now[target_output_name])
+
+        # Default: when output changes → set min/max to ±5 % around new value
+        if (
+            "target_min_val" not in st.session_state
+            or "target_max_val" not in st.session_state
+            or prev_output != target_output_name
+        ):
+            st.session_state["target_min_val"] = y_now * 0.95
+            st.session_state["target_max_val"] = y_now * 1.05
+
+        col_min, col_max = st.columns(2)
+        with col_min:
+            target_min = st.number_input(
+                "Min limit",
+                key="target_min_val",
+            )
+        with col_max:
+            target_max = st.number_input(
+                "Max limit",
+                key="target_max_val",
+            )
+
+        if target_max <= target_min:
+            st.warning("Max must be greater than min.")
+            st.stop()
+
+        inside = target_min <= y_now <= target_max
+
+        # Big colored box with current output value
+        color = "#0f993e" if inside else "#cc0000"
+        st.markdown(
+            f"""
+            <div style="
+                padding: 25px;
+                border-radius: 10px;
+                background-color: {color};
+                color: white;
+                font-size: 32px;
+                font-weight: bold;
+                text-align: center;
+                margin-bottom: 10px;">
+                {target_output_name}: {y_now:.3f}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(
+            f"Target range: **[{target_min:.3f}, {target_max:.3f}]** – adjust inputs below."
+        )
+
+        st.divider()
+
+        # ------------------------------------------------------------------
+        # Find which input parameters actually influence the selected output
+        # (5 % increase must create a noticeable change to be included)
+        # ------------------------------------------------------------------
+        influencing_params = []
+        baseline_y = y_now
+        influence_threshold = 1e-3  # relative change > 0.1 %
+
+        for p in param_names:
+            base_val = current_values[p]
+            delta = 0.05 * abs(base_val) if base_val != 0 else 0.05
+
+            if delta == 0:
+                continue
+
+            try:
+                mod_inputs = copy.deepcopy(base_inputs)
+                # set all to current values
+                for q, v in current_values.items():
+                    mod_inputs[q]["Mean"] = float(v)
+                # bump only this one
+                mod_inputs[p]["Mean"] = float(base_val + delta)
+
+                out_up = compute_zone_outputs(selected_zone, mod_inputs)
+                y_up = out_up.get(target_output_name, baseline_y)
+
+                if not isinstance(y_up, (int, float)):
+                    continue
+                if np.isnan(y_up) or np.isinf(y_up):
+                    continue
+
+                if baseline_y != 0:
+                    rel_diff = abs(y_up - baseline_y) / abs(baseline_y)
+                else:
+                    rel_diff = abs(y_up - baseline_y)
+
+                if rel_diff > influence_threshold:
+                    influencing_params.append(p)
+
+            except Exception:
+                continue
+
+        if not influencing_params:
+            st.info("No input parameters appear to influence the selected output in this region.")
+            st.stop()
+
+        # --------------------------
+        # Compute allowed ranges (amin–amax) for influencing parameters only
+        # --------------------------
+        with st.spinner("Computing allowed intervals..."):
+            allowed_ranges = {}
+            for p in influencing_params:
+                amin, amax = compute_allowed_range_for_param(
+                    param_name=p,
+                    selected_zone=selected_zone,
+                    base_inputs=base_inputs,
+                    current_values=current_values,
+                    target_output_name=target_output_name,
+                    target_min=target_min,
+                    target_max=target_max,
+                    samples=40,
+                )
+                allowed_ranges[p] = (amin, amax)
+
+        st.subheader("Input parameters (that influence the selected output)")
+
+        # --------------------------
+        # Visual sliders – one row: name | slider | info
+        # --------------------------
+        for p in influencing_params:
+            base_mean = float(base_inputs[p]["Mean"])
+
+            # Slider range = ±200 % around base
+            span_factor = 2.0
+            slider_min = base_mean - abs(base_mean) * span_factor
+            slider_max = base_mean + abs(base_mean) * span_factor
+
+            if slider_min == slider_max:
+                slider_min -= 1.0
+                slider_max += 1.0
+
+            current_val = float(
+                st.session_state.get(f"target_range_{p}", base_mean)
+            )
+            current_val = max(slider_min, min(slider_max, current_val))
+
+            span = slider_max - slider_min
+            step = span / 200.0 if span != 0 else 0.01
+
+            amin, amax = allowed_ranges.get(p, (None, None))
+
+            col_name, col_slider, col_info = st.columns([1, 3, 2])
+
+            # ---- NAME ----
+            with col_name:
+                st.markdown(f"### {p}")
+
+            # ---- SLIDER + blue safe-zone overlay ----
+            with col_slider:
+                slider_val = st.slider(
+                    f"{p}_slider",
+                    min_value=float(slider_min),
+                    max_value=float(slider_max),
+                    value=float(current_val),
+                    step=float(step),
+                    key=f"target_range_{p}",
+                    label_visibility="collapsed",
+                )
+
+                total_span = slider_max - slider_min
+
+                if amin is not None and amax is not None and total_span > 0:
+                    safe_min = max(amin, slider_min)
+                    safe_max = min(amax, slider_max)
+
+                    if safe_max > safe_min:
+                        left_pct = (safe_min - slider_min) / total_span * 100
+                        width_pct = (safe_max - slider_min) / total_span * 100 - left_pct
+                    else:
+                        left_pct = 0
+                        width_pct = 0
+
+                    st.markdown(
+                        f"""
+                        <div style="position: relative; height: 12px; margin-top: -10px;">
+                            <div style="
+                                position: absolute;
+                                left: {left_pct}%;
+                                width: {width_pct}%;
+                                height: 12px;
+                                background-color: #2c6bed;
+                                border-radius: 4px;
+                                opacity: 0.45;">
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        """
+                        <div style="height: 12px; background-color: #e0e0e0;
+                                    border-radius: 4px; opacity: 0.3;">
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+            # ---- INFO / WARNING ----
+            with col_info:
+                if amin is None or amax is None:
+                    st.markdown(
+                        f"<span style='color:#b30000;'>❌ No value gives output in the target range.</span>",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        f"Allowed range: <b>{amin:.3g} → {amax:.3g}</b><br>"
+                        f"Current: <b>{slider_val:.3g}</b>",
+                        unsafe_allow_html=True,
+                    )
+                    if not (amin <= slider_val <= amax):
+                        st.markdown(
+                            f"<div style='padding:8px; background:#fff8dd; border-left:4px solid #ffcc00;'>"
+                            f"⚠️ Outside safe range"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+
+            st.markdown("---")
+
+
+# ------------------------------------------------------------
+# TAB 6: CUTTER LIFE & CONSUMPTION
+# ------------------------------------------------------------
+with tab_cutter:
+    st.header("Cutter Life & Consumption")
+
+    zone_data = load_zones()
+    zones = zone_data.get("zones", [])
+
+    if len(zones) == 0:
+        st.warning("No zones defined – please define zones first in the 'Zones Input' tab.")
+    else:
+        inputs = load_inputs()
+
+        # --------------------------
+        # Economic parameters
+        # --------------------------
+        col_cost1, col_cost2 = st.columns(2)
+        with col_cost1:
+            cost_per_ring = st.number_input(
+                "Cost per cutter ring [NOK]",
+                min_value=0.0,
+                value=25000.0,
+                step=1000.0,
+            )
+        with col_cost2:
+            rings_per_change = st.number_input(
+                "Rings replaced per change (avg.)",
+                min_value=0.1,
+                value=1.0,
+                step=0.1,
+            )
+
+        cost_per_change = cost_per_ring * rings_per_change
+
+        # --------------------------
+        # Calculate cutter-related values per zone
+        # --------------------------
+        records = []
+
+        for z in zones:
+            out = compute_zone_outputs(z, inputs)
+
+            zone_name = out.get("Zone name", "") or z.get("zone_name", "")
+            length_m = float(out.get("Length (m)", z.get("length_m", 0.0)) or 0.0)
+
+            net_pen = float(out.get("Net penetration (m/h)", 0.0) or 0.0)
+            daily_adv = float(out.get("Daily advancement (m/day)", 0.0) or 0.0)
+            cutter_life_h = float(out.get("Cutter ring life", 3.4853) or 3.4853)
+            tc_min = float(out.get("Time per changed cutter", inputs["tc"]["Mean"]) or 0.0)
+
+            meters_per_ring = np.nan
+            changes_per_100m = np.nan
+            changes_per_day = np.nan
+            changes_zone = np.nan
+            rings_zone = np.nan
+            downtime_h_zone = np.nan
+            downtime_days_zone = np.nan
+            cost_zone = np.nan
+
+            if net_pen > 0 and cutter_life_h > 0:
+                # meters drilled per ring
+                meters_per_ring = net_pen * cutter_life_h
+
+                if meters_per_ring > 0:
+                    changes_per_meter = 1.0 / meters_per_ring
+                    changes_per_100m = changes_per_meter * 100.0
+                    changes_per_day = changes_per_meter * daily_adv
+                    changes_zone = changes_per_meter * length_m
+
+                    rings_zone = changes_zone * rings_per_change
+
+                    time_per_change_h = tc_min / 60.0
+                    downtime_h_zone = changes_zone * time_per_change_h
+                    downtime_days_zone = downtime_h_zone / 24.0
+
+                    cost_zone = rings_zone * cost_per_ring
+
+            records.append(
+                {
+                    "Zone": zone_name,
+                    "Length (m)": length_m,
+                    "Net penetration (m/h)": net_pen,
+                    "Daily advancement (m/day)": daily_adv,
+                    "Cutter life (h)": cutter_life_h,
+                    "Meters per ring [m/ring]": meters_per_ring,
+                    "Cutter changes per 100 m": changes_per_100m,
+                    "Cutter changes per day": changes_per_day,
+                    "Cutter changes (zone)": changes_zone,
+                    "Ring consumption (zone)": rings_zone,
+                    "Downtime from changes (h)": downtime_h_zone,
+                    "Downtime from changes (days)": downtime_days_zone,
+                    "Cutter cost (zone) [NOK]": cost_zone,
+                }
+            )
+
+        df_cutter = pd.DataFrame(records)
+
+        # Ensure numeric types
+        num_cols = [
+            "Length (m)",
+            "Net penetration (m/h)",
+            "Daily advancement (m/day)",
+            "Cutter life (h)",
+            "Meters per ring [m/ring]",
+            "Cutter changes per 100 m",
+            "Cutter changes per day",
+            "Cutter changes (zone)",
+            "Ring consumption (zone)",
+            "Downtime from changes (h)",
+            "Downtime from changes (days)",
+            "Cutter cost (zone) [NOK]",
+        ]
+        for c in num_cols:
+            df_cutter[c] = pd.to_numeric(df_cutter[c], errors="coerce")
+
+        # --------------------------
+        # Project-level key figures
+        # --------------------------
+        total_changes = df_cutter["Cutter changes (zone)"].sum(skipna=True)
+        total_rings = df_cutter["Ring consumption (zone)"].sum(skipna=True)
+        total_cost = df_cutter["Cutter cost (zone) [NOK]"].sum(skipna=True)
+        total_downtime_days = df_cutter["Downtime from changes (days)"].sum(skipna=True)
+
+        st.subheader("Key project figures")
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total cutter changes", f"{total_changes:,.1f}")
+        m2.metric("Total rings consumed", f"{total_rings:,.1f}")
+        m3.metric("Total cutter cost [NOK]", f"{total_cost:,.0f}")
+        m4.metric("Total downtime (days)", f"{total_downtime_days:,.2f}")
+
+        st.divider()
+
+        # --------------------------
+        # Table per zone
+        # --------------------------
+        st.subheader("Cutter consumption per zone")
+        st.dataframe(df_cutter, width="stretch")
+
+        # --------------------------
+        # Visualisations
+        # --------------------------
+        import altair as alt
+
+        # 1) Cutter changes per 100 m
+        st.subheader("Cutter changes per 100 m (per zone)")
+        plot_df = df_cutter.dropna(subset=["Cutter changes per 100 m"])
+        if not plot_df.empty:
+            changes_chart = (
+                alt.Chart(plot_df)
+                .mark_bar()
+                .encode(
+                    x=alt.X("Zone:N", title="Zone"),
+                    y=alt.Y("Cutter changes per 100 m:Q", title="Changes per 100 m"),
+                    tooltip=[
+                        "Zone",
+                        "Cutter changes per 100 m",
+                        "Cutter changes (zone)",
+                    ],
+                )
+                .properties(width=700, height=350)
+            )
+            st.altair_chart(changes_chart)
+        else:
+            st.info("No valid data for cutter changes per 100 m.")
+
+        # 2) Cutter cost per zone
+        st.subheader("Cutter cost per zone")
+
+        # Rename cost column to a simple name for plotting
+        cost_df = df_cutter.dropna(subset=["Cutter cost (zone) [NOK]"]).copy()
+        cost_df["CutterCost"] = pd.to_numeric(
+            cost_df["Cutter cost (zone) [NOK]"], errors="coerce"
+        )
+
+        if not cost_df.empty:
+            cost_chart = (
+                alt.Chart(cost_df)
+                .mark_bar()
+                .encode(
+                    x=alt.X("Zone:N", title="Zone"),
+                    y=alt.Y("CutterCost:Q", title="Cost [NOK]"),
+                    tooltip=[
+                        "Zone",
+                        alt.Tooltip("CutterCost:Q", title="Cost [NOK]", format=",.0f"),
+                        "Ring consumption (zone)",
+                        "Cutter changes (zone)",
+                    ],
+                )
+                .properties(width=700, height=350)
+            )
+            st.altair_chart(cost_chart)
+        else:
+            st.info("No valid cutter cost data.")
+
+# ------------------------------------------------------------
+# TAB 7: TBM PERFORMANCE ENVELOPE (scatter)
+# ------------------------------------------------------------
+with tab_perf:
+    st.header("TBM performance envelope")
+
+    zone_data = load_zones()
+    zones = zone_data.get("zones", [])
+
+    if len(zones) == 0:
+        st.warning("No zones defined – please define zones first in the 'Zones Input' tab.")
+    else:
+        inputs = load_inputs()
+
+        records = []
+        for z in zones:
+            out = compute_zone_outputs(z, inputs)
+            zone_name = out.get("Zone name", "") or z.get("zone_name", "")
+
+            records.append(
+                {
+                    "Zone": zone_name,
+                    "Ks Rock Mass": out.get("Ks Rock Mass", np.nan),
+                    "Equivalent fracturing": out.get("Equivalent fracturing", np.nan),
+                    "Equivalent thrust": out.get("Equivalent thrust", np.nan),
+                    "Net penetration (m/h)": out.get("Net penetration (m/h)", np.nan),
+                    "Daily advancement (m/day)": out.get("Daily advancement (m/day)", np.nan),
+                }
+            )
+
+        df_perf = pd.DataFrame(records)
+        for c in [
+            "Ks Rock Mass",
+            "Equivalent fracturing",
+            "Equivalent thrust",
+            "Net penetration (m/h)",
+            "Daily advancement (m/day)",
+        ]:
+            df_perf[c] = pd.to_numeric(df_perf[c], errors="coerce")
+
+        x_options = {
+            "Ks Rock Mass": "Ks Rock Mass",
+            "Equivalent fracturing": "Equivalent fracturing",
+            "Equivalent thrust": "Equivalent thrust",
+        }
+        y_options = {
+            "Net penetration (m/h)": "Net penetration (m/h)",
+            "Daily advancement (m/day)": "Daily advancement (m/day)",
+        }
+
+        col_x, col_y = st.columns(2)
+        with col_x:
+            x_label = st.selectbox("X-axis parameter", list(x_options.keys()), index=0)
+        with col_y:
+            y_label = st.selectbox("Y-axis parameter", list(y_options.keys()), index=0)
+
+        x_col = x_options[x_label]
+        y_col = y_options[y_label]
+
+        plot_df = df_perf.dropna(subset=[x_col, y_col])
+
+        if plot_df.empty:
+            st.info("No valid data for the selected axes.")
+        else:
+            chart = (
+                alt.Chart(plot_df)
+                .mark_circle(size=120)
+                .encode(
+                    x=alt.X(f"{x_col}:Q", title=x_label, scale=alt.Scale(zero=False, nice=True)),
+                    y=alt.Y(f"{y_col}:Q", title=y_label, scale=alt.Scale(zero=False, nice=True)),
+                    color=alt.Color("Zone:N", title="Zone"),
+                    tooltip=[
+                        "Zone",
+                        alt.Tooltip(x_col, title=x_label),
+                        alt.Tooltip(y_col, title=y_label),
+                    ],
+                )
+                .properties(width=800, height=450)
+            )
+            st.altair_chart(chart, use_container_width=False)
+
+
+# ------------------------------------------------------------
+# TAB 8: TIME BUDGET & UTILIZATION
+# ------------------------------------------------------------
+with tab_time:
+    st.header("Time budget & utilization")
+
+    zone_data = load_zones()
+    zones = zone_data.get("zones", [])
+
+    if len(zones) == 0:
+        st.warning("No zones defined – please define zones first in the 'Zones Input' tab.")
+    else:
+        inputs = load_inputs()
+        records = []
+
+        for z in zones:
+            out = compute_zone_outputs(z, inputs)
+            zone_name = out.get("Zone name", "") or z.get("zone_name", "")
+
+            boring_time = out.get("Boring time", np.nan)
+            seg = out.get("Segment installation time", np.nan)
+            cutter_time = out.get("Cutter time", np.nan)
+            repair_tbm = out.get("Repair and service of TBM", np.nan)
+            repair_back = out.get("Repair and service of backup", np.nan)
+            other_time = out.get("Other time consumption", np.nan)
+
+            terms = [boring_time, seg, cutter_time, repair_tbm, repair_back, other_time]
+            terms = [t if not np.isinf(t) else np.nan for t in terms]
+
+            if any(np.isnan(t) for t in terms):
+                total = np.nan
+            else:
+                total = sum(terms)
+
+            if total and not np.isnan(total) and total > 0:
+                share_boring = boring_time / total
+                share_seg = seg / total
+                share_cutter = cutter_time / total
+                share_tbm = repair_tbm / total
+                share_back = repair_back / total
+                share_other = other_time / total
+            else:
+                share_boring = share_seg = share_cutter = share_tbm = share_back = share_other = np.nan
+
+            records.append(
+                {
+                    "Zone": zone_name,
+                    "Boring": share_boring,
+                    "Segment installation": share_seg,
+                    "Cutter-related": share_cutter,
+                    "TBM repair": share_tbm,
+                    "Backup repair": share_back,
+                    "Other": share_other,
+                    "Utilization": out.get("Utilization", np.nan),
+                }
+            )
+
+        df_time = pd.DataFrame(records)
+
+        st.subheader("Utilization per zone")
+        util_df = df_time[["Zone", "Utilization"]].copy()
+        st.dataframe(util_df, width="stretch")
+
+        st.subheader("Time budget breakdown per zone")
+
+        melt_cols = ["Boring", "Segment installation", "Cutter-related", "TBM repair", "Backup repair", "Other"]
+        plot_df = df_time[["Zone"] + melt_cols].copy()
+        for c in melt_cols:
+            plot_df[c] = pd.to_numeric(plot_df[c], errors="coerce")
+
+        plot_df = plot_df.melt(id_vars="Zone", value_vars=melt_cols, var_name="Category", value_name="Share")
+        plot_df = plot_df.dropna(subset=["Share"])
+
+        if plot_df.empty:
+            st.info("No valid time budget data.")
+        else:
+            chart = (
+                alt.Chart(plot_df)
+                .mark_bar()
+                .encode(
+                    x=alt.X("Zone:N", title="Zone"),
+                    y=alt.Y("Share:Q", title="Share of cycle", stack="normalize"),
+                    color=alt.Color("Category:N", title="Time category"),
+                    tooltip=["Zone", "Category", alt.Tooltip("Share:Q", format=".2f")],
+                )
+                .properties(width=800, height=450)
+            )
+            st.altair_chart(chart, use_container_width=False)
+
+
+# ------------------------------------------------------------
+# TAB 9: ROCK VS PERFORMANCE – scatter dashboard
+# ------------------------------------------------------------
+with tab_rock_perf:
+    st.header("Rock vs performance")
+
+    zone_data = load_zones()
+    zones = zone_data.get("zones", [])
+
+    if len(zones) == 0:
+        st.warning("No zones defined – please define zones first in the 'Zones Input' tab.")
+    else:
+        inputs = load_inputs()
+
+        # Local cost settings (only used if you choose cost on y-axis)
+        col_cost1, col_cost2 = st.columns(2)
+        with col_cost1:
+            cost_per_ring = st.number_input(
+                "Cutter ring cost [NOK]",
+                min_value=0.0,
+                value=25000.0,
+                step=1000.0,
+                key="rwp_cost_per_ring",
+            )
+        with col_cost2:
+            rings_per_change = st.number_input(
+                "Rings changed per intervention",
+                min_value=0.1,
+                value=1.0,
+                step=0.1,
+                key="rwp_rings_per_change",
+            )
+
+        records = []
+        for z in zones:
+            out = compute_zone_outputs(z, inputs)
+
+            zone_name = out.get("Zone name", "") or z.get("zone_name", "")
+            rock_domain = z.get("rock_domain", "")
+
+            try:
+                dri = float(z["DRI"]["Mean"])
+            except Exception:
+                dri = np.nan
+            try:
+                cli = float(z["CLI"]["Mean"])
+            except Exception:
+                cli = np.nan
+            try:
+                q_val = float(z["Q"]["Mean"])
+            except Exception:
+                q_val = np.nan
+            try:
+                por = float(z["Porosity"]["Mean"])
+            except Exception:
+                por = np.nan
+
+            ks_rm = float(out.get("Ks Rock Mass", np.nan) or np.nan)
+            k_equiv = float(out.get("Equivalent fracturing", np.nan) or np.nan)
+
+            net_pen = float(out.get("Net penetration (m/h)", np.nan) or np.nan)
+            daily_adv = float(out.get("Daily advancement (m/day)", np.nan) or np.nan)
+            util = float(out.get("Utilization", np.nan) or np.nan)
+
+            cutter_life_h = float(out.get("Cutter ring life", np.nan) or np.nan)
+
+            changes_per_100m = np.nan
+            cost_per_m = np.nan
+
+            if (
+                net_pen is not None
+                and cutter_life_h is not None
+                and net_pen > 0
+                and cutter_life_h > 0
+            ):
+                meters_per_ring = net_pen * cutter_life_h  # [m/ring]
+                if meters_per_ring > 0:
+                    changes_per_meter = 1.0 / meters_per_ring
+                    changes_per_100m = changes_per_meter * 100.0
+
+                    rings_per_meter = changes_per_meter * rings_per_change
+                    cost_per_m = rings_per_meter * cost_per_ring
+
+            fr_set1 = z.get("set1", {}).get("Fr_mean", "")
+
+            records.append(
+                {
+                    "Zone": zone_name,
+                    "rock_domain": rock_domain,
+                    "Fr_set1": fr_set1,
+                    "DRI": dri,
+                    "CLI": cli,
+                    "Q": q_val,
+                    "Porosity": por,
+                    "Ks Rock Mass": ks_rm,
+                    "Equivalent fracturing": k_equiv,
+                    "Net penetration (m/h)": net_pen,
+                    "Daily advancement (m/day)": daily_adv,
+                    "Utilization": util,
+                    "Cutter changes per 100 m": changes_per_100m,
+                    "Cutter cost per meter [NOK/m]": cost_per_m,
+                }
+            )
+
+        df_rwp = pd.DataFrame(records)
+
+        numeric_cols = [
+            "DRI",
+            "CLI",
+            "Q",
+            "Porosity",
+            "Ks Rock Mass",
+            "Equivalent fracturing",
+            "Net penetration (m/h)",
+            "Daily advancement (m/day)",
+            "Utilization",
+            "Cutter changes per 100 m",
+            "Cutter cost per meter [NOK/m]",
+        ]
+        for c in numeric_cols:
+            df_rwp[c] = pd.to_numeric(df_rwp[c], errors="coerce")
+
+        x_options = {
+            "DRI": "DRI",
+            "CLI": "CLI",
+            "Q": "Q",
+            "Porosity": "Porosity",
+            "Ks Rock Mass": "Ks Rock Mass",
+            "Equivalent fracturing": "Equivalent fracturing",
+        }
+
+        y_options = {
+            "Net penetration (m/h)": "Net penetration (m/h)",
+            "Daily advancement (m/day)": "Daily advancement (m/day)",
+            "Utilization": "Utilization",
+            "Cutter changes per 100 m": "Cutter changes per 100 m",
+            "Cutter cost per meter [NOK/m]": "Cutter cost per meter [NOK/m]",
+        }
+
+        col_x, col_y = st.columns(2)
+        with col_x:
+            x_label = st.selectbox("Rock parameter (x-axis)", list(x_options.keys()), index=0)
+        with col_y:
+            y_label = st.selectbox(
+                "Performance parameter (y-axis)",
+                list(y_options.keys()),
+                index=1,  # default: Daily advancement
+            )
+
+        x_col = x_options[x_label]
+        y_col = y_options[y_label]
+
+        color_choice = st.selectbox(
+            "Color points by",
+            ["Rock domain", "Fr-class (set1)", "Zone"],
+            index=0,
+        )
+        if color_choice == "Rock domain":
+            color_field = "rock_domain"
+        elif color_choice == "Fr-class (set1)":
+            color_field = "Fr_set1"
+        else:
+            color_field = "Zone"
+
+        add_reg = st.checkbox("Add regression line", value=True)
+
+        plot_df = df_rwp.dropna(subset=[x_col, y_col])
+
+        if plot_df.empty:
+            st.info("No valid data for the selected axes.")
+        else:
+            base = (
+                alt.Chart(plot_df)
+                .mark_circle(size=120)
+                .encode(
+                    x=alt.X(
+                        f"{x_col}:Q",
+                        title=x_label,
+                        scale=alt.Scale(zero=False, nice=True),
+                    ),
+                    y=alt.Y(
+                        f"{y_col}:Q",
+                        title=y_label,
+                        scale=alt.Scale(zero=False, nice=True),
+                    ),
+                    color=alt.Color(f"{color_field}:N", title=color_choice),
+                    tooltip=[
+                        "Zone",
+                        "rock_domain",
+                        "Fr_set1",
+                        alt.Tooltip(x_col, title=x_label),
+                        alt.Tooltip(y_col, title=y_label),
+                        alt.Tooltip("DRI:Q", title="DRI"),
+                        alt.Tooltip("Q:Q", title="Q"),
+                        alt.Tooltip("Porosity:Q", title="Porosity"),
+                        alt.Tooltip("Ks Rock Mass:Q", title="Ks Rock Mass"),
+                        alt.Tooltip("Equivalent fracturing:Q", title="Equivalent fracturing"),
+                    ],
+                )
+                .properties(width=800, height=450)
+            )
+
+            chart = base
+
+            r2_text = ""
+            if add_reg and plot_df[x_col].nunique() > 1:
+                reg_line = (
+                    base.transform_regression(
+                        x_col,
+                        y_col,
+                        method="linear",
+                        as_=[x_col, "y_fit"],
+                    )
+                    .mark_line(color="black", strokeDash=[4, 4])
+                    .encode(y="y_fit:Q")
+                )
+                chart = base + reg_line
+
+                x_vals = plot_df[x_col].to_numpy()
+                y_vals = plot_df[y_col].to_numpy()
+                try:
+                    coeffs = np.polyfit(x_vals, y_vals, 1)
+                    y_pred = coeffs[0] * x_vals + coeffs[1]
+                    ss_res = np.sum((y_vals - y_pred) ** 2)
+                    ss_tot = np.sum((y_vals - np.mean(y_vals)) ** 2)
+                    r2 = 1.0 - ss_res / ss_tot if ss_tot != 0 else np.nan
+                    if not np.isnan(r2):
+                        r2_text = f"Estimated R² (linear fit): {r2:.2f}"
+                except Exception:
+                    r2_text = ""
+
+            st.altair_chart(chart, use_container_width=False)
+
+            if r2_text:
+                st.caption(r2_text)
+
+
+# ------------------------------------------------------------
+# TAB 10: LONGITUDINAL PROFILE
+# ------------------------------------------------------------
+with tab_profile:
+    st.header("Longitudinal tunnel profile")
+
+    zone_data = load_zones()
+    zones = zone_data.get("zones", [])
+
+    if len(zones) == 0:
+        st.warning("No zones defined – please define zones first in the 'Zones Input' tab.")
+    else:
+        inputs = load_inputs()
+
+        # simple helper: "0+244" -> 244
+        def parse_chainage(ch_str: str) -> float:
+            try:
+                if "+" in ch_str:
+                    a, b = ch_str.split("+")
+                    return float(a) * 1000.0 + float(b)
+                return float(ch_str)
+            except Exception:
+                return np.nan
+
+        records = []
+        for z in zones:
+            out = compute_zone_outputs(z, inputs)
+
+            zone_name = out.get("Zone name", "") or z.get("zone_name", "")
+            rock_domain = z.get("rock_domain", "")
+
+            ch_from = parse_chainage(z.get("chainage_from", "0"))
+            ch_to = parse_chainage(z.get("chainage_to", "0"))
+            ch_mid = (ch_from + ch_to) / 2.0 if not np.isnan(ch_from) and not np.isnan(ch_to) else np.nan
+
+            daily_adv = out.get("Daily advancement (m/day)", np.nan)
+            ks_rm = out.get("Ks Rock Mass", np.nan)
+            k_equiv = out.get("Equivalent fracturing", np.nan)
+
+            records.append(
+                {
+                    "Zone": zone_name,
+                    "rock_domain": rock_domain,
+                    "chainage_from_m": ch_from,
+                    "chainage_to_m": ch_to,
+                    "chainage_mid_m": ch_mid,
+                    "Daily advancement (m/day)": daily_adv,
+                    "Ks Rock Mass": ks_rm,
+                    "Equivalent fracturing": k_equiv,
+                }
+            )
+
+        df_prof = pd.DataFrame(records)
+        df_prof = df_prof.dropna(subset=["chainage_from_m", "chainage_to_m"])
+
+        if df_prof.empty:
+            st.info("No valid chainage data to build a longitudinal profile.")
+        else:
+            st.subheader("Rock domains along chainage")
+
+            rect_chart = (
+                alt.Chart(df_prof)
+                .mark_rect()
+                .encode(
+                    x=alt.X("chainage_from_m:Q", title="Chainage [m]"),
+                    x2="chainage_to_m:Q",
+                    y=alt.value(0),
+                    color=alt.Color("rock_domain:N", title="Rock domain"),
+                    tooltip=[
+                        "Zone",
+                        "rock_domain",
+                        alt.Tooltip("chainage_from_m:Q", title="From [m]"),
+                        alt.Tooltip("chainage_to_m:Q", title="To [m]"),
+                    ],
+                )
+                .properties(width=800, height=80)
+            )
+
+            st.altair_chart(rect_chart, use_container_width=False)
+
+            st.subheader("Daily advancement and fracturing along chainage")
+
+            line_adv = (
+                alt.Chart(df_prof)
+                .mark_line(point=True)
+                .encode(
+                    x=alt.X("chainage_mid_m:Q", title="Chainage [m]"),
+                    y=alt.Y("Daily advancement (m/day):Q", title="Daily advancement [m/day]"),
+                    color=alt.value("#1f77b4"),
+                    tooltip=[
+                        "Zone",
+                        "rock_domain",
+                        alt.Tooltip("Daily advancement (m/day):Q", format=".2f"),
+                    ],
+                )
+            )
+
+            line_ks = (
+                alt.Chart(df_prof)
+                .mark_line(point=True)
+                .encode(
+                    x=alt.X("chainage_mid_m:Q", title="Chainage [m]"),
+                    y=alt.Y("Ks Rock Mass:Q", title="Ks Rock Mass"),
+                    color=alt.value("#ff7f0e"),
+                    tooltip=[
+                        "Zone",
+                        "rock_domain",
+                        alt.Tooltip("Ks Rock Mass:Q", format=".2f"),
+                    ],
+                )
+            )
+
+            combo = alt.layer(line_adv, line_ks).resolve_scale(
+                y="independent"
+            ).properties(width=800, height=400)
+
+            st.altair_chart(combo, use_container_width=False)
